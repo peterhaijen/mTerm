@@ -11,6 +11,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMap>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QRegularExpression>
 #include <QSet>
@@ -283,17 +284,11 @@ MainWindow::MainWindow(QWidget *parent)
         return terminal;
     };
 
-    auto *terminalMenu = menuBar()->addMenu(QStringLiteral("Terminal"));
-    terminalMenu->addAction(QStringLiteral("New"), this, [createTerminal]() {
-        createTerminal();
-    });
+    auto *fileMenu = menuBar()->addMenu(QStringLiteral("File"));
+    fileMenu->addAction(QStringLiteral("Exit"), this, &QWidget::close);
 
     auto *hostsMenu = menuBar()->addMenu(QStringLiteral("Hosts"));
     const QList<SshHostEntry> hosts = readSshConfigHosts();
-    if (hosts.isEmpty()) {
-        QAction *emptyAction = hostsMenu->addAction(QStringLiteral("No hosts found"));
-        emptyAction->setEnabled(false);
-    }
 
     QMap<QString, QMenu *> groupMenus;
     QMap<QString, QStringList> groupHosts;
@@ -306,6 +301,14 @@ MainWindow::MainWindow(QWidget *parent)
     auto openHost = [createTerminal](const QString &host) {
         createTerminal(host, QStringLiteral("ssh"), QStringList{host});
     };
+
+    hostsMenu->addAction(QStringLiteral("localhost"), this, [createTerminal]() {
+        createTerminal(QStringLiteral("localhost"));
+    });
+
+    if (!hosts.isEmpty()) {
+        hostsMenu->addSeparator();
+    }
 
     auto addHostAction = [this, openHost](QMenu *menu, const QString &host) {
         menu->addAction(host, this, [host, openHost]() {
@@ -338,6 +341,20 @@ MainWindow::MainWindow(QWidget *parent)
 
         addHostAction(groupMenu, entry.host);
     }
+
+    auto *helpMenu = menuBar()->addMenu(QStringLiteral("Help"));
+    helpMenu->addAction(QStringLiteral("Shortcuts"), this, [this]() {
+        QMessageBox::information(
+            this,
+            QStringLiteral("Shortcuts"),
+            QStringLiteral(
+                "Ctrl+Right: next tab\n"
+                "Ctrl+Left: previous tab\n"
+                "Ctrl+Space: toggle broadcast checkbox for the current tab\n"
+                "Ctrl+Delete: close current tab\n"
+                "Click tab checkbox: toggle broadcast for that tab\n"
+                "Ctrl+Click tab checkbox: set all tab checkboxes to the same state"));
+    });
 
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(tabs);
