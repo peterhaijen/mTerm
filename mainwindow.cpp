@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QDir>
+#include <QEvent>
 #include <QFile>
 #include <QFont>
 #include <QGridLayout>
@@ -33,6 +34,7 @@ struct TerminalSession
     QTermWidget *terminal = nullptr;
     QString title;
     bool broadcastEnabled = true;
+    bool hasFocus = false;
 };
 
 enum class ViewMode { Tabs, Tile };
@@ -42,7 +44,10 @@ struct TerminalUiState
     QList<TerminalSession *> sessions;
     ViewMode viewMode = ViewMode::Tabs;
     std::function<void()> renderCurrentView;
+    std::function<void(TerminalSession *)> setActiveSession;
 };
+
+static TerminalSession *sessionForTerminal(TerminalUiState *state, QTermWidget *terminal);
 
 class BroadcastCheckBox : public QCheckBox
 {
@@ -75,6 +80,48 @@ protected:
 
 private:
     TerminalSession *session = nullptr;
+};
+
+class TerminalFocusFilter : public QObject
+{
+public:
+    TerminalFocusFilter(TerminalUiState *state, QObject *parent = nullptr)
+        : QObject(parent)
+        , state(state)
+    {
+    }
+
+protected:
+    bool eventFilter(QObject *object, QEvent *event) override
+    {
+        if (event->type() != QEvent::FocusIn
+            && event->type() != QEvent::MouseButtonPress
+            && event->type() != QEvent::KeyPress) {
+            return QObject::eventFilter(object, event);
+        }
+
+        TerminalSession *focusedSession = nullptr;
+        QObject *currentObject = object;
+        while (currentObject && !focusedSession) {
+            if (auto *terminal = qobject_cast<QTermWidget *>(currentObject)) {
+                focusedSession = sessionForTerminal(state, terminal);
+            }
+            currentObject = currentObject->parent();
+        }
+
+        if (!focusedSession) {
+            return QObject::eventFilter(object, event);
+        }
+
+        if (state->setActiveSession) {
+            state->setActiveSession(focusedSession);
+        }
+
+        return QObject::eventFilter(object, event);
+    }
+
+private:
+    TerminalUiState *state = nullptr;
 };
 
 struct SshHostEntry
@@ -192,6 +239,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     auto *state = new TerminalUiState;
+    qApp->installEventFilter(new TerminalFocusFilter(state, this));
     connect(this, &QObject::destroyed, this, [state]() {
         for (TerminalSession *session : state->sessions) {
             delete session;
@@ -206,6 +254,7 @@ MainWindow::MainWindow(QWidget *parent)
     auto *tileContent = new QWidget(tileScroll);
     auto *tileLayout = new QGridLayout(tileContent);
     auto *emptyLabel = new QLabel(QStringLiteral("No terminals open"), central);
+    auto *tileHeaders = new QMap<TerminalSession *, QWidget *>;
 
     emptyLabel->setAlignment(Qt::AlignCenter);
     tileScroll->setWidget(tileContent);
@@ -231,6 +280,31 @@ MainWindow::MainWindow(QWidget *parent)
         emptyLabel->setVisible(!hasSessions);
     };
 
+    auto updateTileHeaderStyles = [tileHeaders]() {
+        for (auto it = tileHeaders->begin(); it != tileHeaders->end(); ++it) {
+            TerminalSession *session = it.key();
+            QWidget *header = it.value();
+            header->setStyleSheet(session->hasFocus
+                                      ? QStringLiteral("background-color: #2f6fed; color: white; padding: 3px;")
+                                      : QStringLiteral("background-color: #3a3a3a; color: white; padding: 3px;"));
+        }
+    };
+
+    state->setActiveSession = [state, updateTileHeaderStyles](TerminalSession *activeSession) {
+        bool changed = false;
+        for (TerminalSession *session : state->sessions) {
+            const bool hasFocus = session == activeSession;
+            if (session->hasFocus != hasFocus) {
+                session->hasFocus = hasFocus;
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            updateTileHeaderStyles();
+        }
+    };
+
     auto clearTabs = [tabs]() {
         while (tabs->count() > 0) {
             QWidget *widget = tabs->widget(0);
@@ -246,7 +320,9 @@ MainWindow::MainWindow(QWidget *parent)
         }
     };
 
-    auto clearTile = [state, tileLayout]() {
+    auto clearTile = [state, tileLayout, tileHeaders]() {
+        tileHeaders->clear();
+
         for (TerminalSession *session : state->sessions) {
             session->terminal->setParent(nullptr);
         }
@@ -264,6 +340,10 @@ MainWindow::MainWindow(QWidget *parent)
             return;
         }
 
+        if (state->setActiveSession) {
+            state->setActiveSession(session);
+        }
+
         if (state->viewMode == ViewMode::Tabs) {
             const int index = tabs->indexOf(session->terminal);
             if (index != -1) {
@@ -274,7 +354,7 @@ MainWindow::MainWindow(QWidget *parent)
         session->terminal->setFocus();
     };
 
-    state->renderCurrentView = [state, tabs, tileContent, tileLayout, clearTabs, clearTile, updateEmptyState, setAllBroadcast, focusSession]() {
+    state->renderCurrentView = [state, tabs, tileContent, tileLayout, tileHeaders, clearTabs, clearTile, updateEmptyState, setAllBroadcast, focusSession]() {
         clearTabs();
         clearTile();
 
@@ -303,6 +383,11 @@ MainWindow::MainWindow(QWidget *parent)
                 auto *headerLayout = new QHBoxLayout(header);
                 auto *checkBox = new BroadcastCheckBox(session, header);
                 auto *title = new QLabel(session->title, header);
+
+                header->setStyleSheet(session->hasFocus
+                                          ? QStringLiteral("background-color: #2f6fed; color: white; padding: 3px;")
+                                          : QStringLiteral("background-color: #3a3a3a; color: white; padding: 3px;"));
+                tileHeaders->insert(session, header);
 
                 checkBox->setAllChecked = [state, setAllBroadcast](bool checked) {
                     setAllBroadcast(checked);
@@ -339,11 +424,23 @@ MainWindow::MainWindow(QWidget *parent)
             return;
         }
 
+        const int closedIndex = state->sessions.indexOf(session);
         state->sessions.removeAll(session);
         QObject::disconnect(session->terminal, nullptr, nullptr, nullptr);
         session->terminal->setParent(nullptr);
         session->terminal->deleteLater();
         delete session;
+
+        if (!state->sessions.isEmpty()) {
+            const int nextIndex = closedIndex < state->sessions.count() ? closedIndex : state->sessions.count() - 1;
+            TerminalSession *nextSession = state->sessions.at(nextIndex);
+            if (state->setActiveSession) {
+                state->setActiveSession(nextSession);
+            } else {
+                nextSession->hasFocus = true;
+            }
+        }
+
         state->renderCurrentView();
     };
 
@@ -351,7 +448,18 @@ MainWindow::MainWindow(QWidget *parent)
         if (state->viewMode == ViewMode::Tabs) {
             return sessionForTerminal(state, qobject_cast<QTermWidget *>(tabs->currentWidget()));
         }
-        return sessionFromFocusedWidget(state);
+
+        if (TerminalSession *session = sessionFromFocusedWidget(state)) {
+            return session;
+        }
+
+        for (TerminalSession *session : state->sessions) {
+            if (session->hasFocus) {
+                return session;
+            }
+        }
+
+        return nullptr;
     };
 
     auto *nextTabShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Right), this);
@@ -405,7 +513,10 @@ MainWindow::MainWindow(QWidget *parent)
                                                                    const QStringList &args = QStringList()) {
         const bool useCustomProgram = !program.isEmpty();
         auto *terminal = new QTermWidget(useCustomProgram ? 0 : 1, this);
-        auto *session = new TerminalSession{terminal, tabName, true};
+        auto *session = new TerminalSession{terminal, tabName, true, true};
+        for (TerminalSession *otherSession : state->sessions) {
+            otherSession->hasFocus = false;
+        }
         state->sessions.append(session);
 
         QFont font = terminalFont;
