@@ -6,6 +6,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFont>
+#include <QGridLayout>
+#include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMenu>
@@ -14,6 +16,7 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QRegularExpression>
+#include <QScrollArea>
 #include <QSet>
 #include <QShortcut>
 #include <QTabBar>
@@ -23,57 +26,55 @@
 #include <QWidget>
 #include <qtermwidget.h>
 
-static QCheckBox *broadcastCheckBox(QTabWidget *tabs, int index);
+#include <functional>
+
+struct TerminalSession
+{
+    QTermWidget *terminal = nullptr;
+    QString title;
+    bool broadcastEnabled = true;
+};
+
+enum class ViewMode { Tabs, Tile };
+
+struct TerminalUiState
+{
+    QList<TerminalSession *> sessions;
+    ViewMode viewMode = ViewMode::Tabs;
+    std::function<void()> renderCurrentView;
+};
 
 class BroadcastCheckBox : public QCheckBox
 {
 public:
-    explicit BroadcastCheckBox(QTabWidget *tabs)
-        : QCheckBox(tabs)
-        , tabs(tabs)
+    explicit BroadcastCheckBox(TerminalSession *session, QWidget *parent = nullptr)
+        : QCheckBox(parent)
+        , session(session)
     {
+        setChecked(session->broadcastEnabled);
+        setToolTip(QStringLiteral("Receive broadcast input"));
     }
+
+    std::function<void(bool)> setAllChecked;
+    std::function<void()> focusSession;
 
 protected:
     void mouseReleaseEvent(QMouseEvent *event) override
     {
         QCheckBox::mouseReleaseEvent(event);
+        session->broadcastEnabled = isChecked();
 
-        if (!(event->modifiers() & Qt::ControlModifier)) {
-            focusTabWhenChecked();
-            return;
+        if ((event->modifiers() & Qt::ControlModifier) && setAllChecked) {
+            setAllChecked(isChecked());
         }
 
-        for (int index = 0; index < tabs->count(); ++index) {
-            auto *checkBox = broadcastCheckBox(tabs, index);
-            if (checkBox) {
-                checkBox->setChecked(isChecked());
-            }
+        if (isChecked() && focusSession) {
+            focusSession();
         }
-
-        focusTabWhenChecked();
     }
 
 private:
-    void focusTabWhenChecked()
-    {
-        if (!isChecked()) {
-            return;
-        }
-
-        for (int index = 0; index < tabs->count(); ++index) {
-            if (broadcastCheckBox(tabs, index) == this) {
-                tabs->setCurrentIndex(index);
-                auto *widget = tabs->widget(index);
-                if (widget) {
-                    widget->setFocus();
-                }
-                return;
-            }
-        }
-    }
-
-    QTabWidget *tabs = nullptr;
+    TerminalSession *session = nullptr;
 };
 
 struct SshHostEntry
@@ -151,116 +152,281 @@ static QList<SshHostEntry> readSshConfigHosts()
     return entries;
 }
 
-static QCheckBox *broadcastCheckBox(QTabWidget *tabs, int index)
+static TerminalSession *sessionForTerminal(TerminalUiState *state, QTermWidget *terminal)
 {
-    return qobject_cast<QCheckBox *>(tabs->tabBar()->tabButton(index, QTabBar::LeftSide));
+    for (TerminalSession *session : state->sessions) {
+        if (session->terminal == terminal) {
+            return session;
+        }
+    }
+    return nullptr;
 }
 
-static bool shouldReceiveBroadcast(QTabWidget *tabs, int index)
+static TerminalSession *sessionFromFocusedWidget(TerminalUiState *state)
 {
-    auto *checkBox = broadcastCheckBox(tabs, index);
-    return checkBox && checkBox->isChecked();
+    QObject *object = QApplication::focusWidget();
+    while (object) {
+        if (auto *terminal = qobject_cast<QTermWidget *>(object)) {
+            return sessionForTerminal(state, terminal);
+        }
+        object = object->parent();
+    }
+    return nullptr;
+}
+
+static int tileColumns(int count)
+{
+    if (count <= 1) {
+        return 1;
+    }
+    if (count <= 4) {
+        return 2;
+    }
+    if (count <= 9) {
+        return 3;
+    }
+    return 4;
 }
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
+    auto *state = new TerminalUiState;
+    connect(this, &QObject::destroyed, this, [state]() {
+        for (TerminalSession *session : state->sessions) {
+            delete session;
+        }
+        delete state;
+    });
+
     auto *central = new QWidget(this);
     auto *layout = new QVBoxLayout(central);
     auto *tabs = new QTabWidget(central);
+    auto *tileScroll = new QScrollArea(central);
+    auto *tileContent = new QWidget(tileScroll);
+    auto *tileLayout = new QGridLayout(tileContent);
     auto *emptyLabel = new QLabel(QStringLiteral("No terminals open"), central);
-    emptyLabel->setAlignment(Qt::AlignCenter);
 
-    auto updateEmptyState = [tabs, emptyLabel]() {
-        const bool hasTabs = tabs->count() > 0;
-        tabs->setVisible(hasTabs);
-        emptyLabel->setVisible(!hasTabs);
+    emptyLabel->setAlignment(Qt::AlignCenter);
+    tileScroll->setWidget(tileContent);
+    tileScroll->setWidgetResizable(true);
+    tileLayout->setContentsMargins(6, 6, 6, 6);
+    tileLayout->setSpacing(6);
+
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->addWidget(tabs);
+    layout->addWidget(tileScroll);
+    layout->addWidget(emptyLabel);
+
+    auto setAllBroadcast = [state](bool checked) {
+        for (TerminalSession *session : state->sessions) {
+            session->broadcastEnabled = checked;
+        }
+    };
+
+    auto updateEmptyState = [state, tabs, tileScroll, emptyLabel]() {
+        const bool hasSessions = !state->sessions.isEmpty();
+        tabs->setVisible(hasSessions && state->viewMode == ViewMode::Tabs);
+        tileScroll->setVisible(hasSessions && state->viewMode == ViewMode::Tile);
+        emptyLabel->setVisible(!hasSessions);
+    };
+
+    auto clearTabs = [tabs]() {
+        while (tabs->count() > 0) {
+            QWidget *widget = tabs->widget(0);
+            QWidget *button = tabs->tabBar()->tabButton(0, QTabBar::LeftSide);
+            tabs->tabBar()->setTabButton(0, QTabBar::LeftSide, nullptr);
+            if (button) {
+                button->deleteLater();
+            }
+            tabs->removeTab(0);
+            if (widget) {
+                widget->setParent(nullptr);
+            }
+        }
+    };
+
+    auto clearTile = [state, tileLayout]() {
+        for (TerminalSession *session : state->sessions) {
+            session->terminal->setParent(nullptr);
+        }
+
+        while (QLayoutItem *item = tileLayout->takeAt(0)) {
+            if (QWidget *widget = item->widget()) {
+                widget->deleteLater();
+            }
+            delete item;
+        }
+    };
+
+    auto focusSession = [state, tabs](TerminalSession *session) {
+        if (!session) {
+            return;
+        }
+
+        if (state->viewMode == ViewMode::Tabs) {
+            const int index = tabs->indexOf(session->terminal);
+            if (index != -1) {
+                tabs->setCurrentIndex(index);
+            }
+        }
+
+        session->terminal->setFocus();
+    };
+
+    state->renderCurrentView = [state, tabs, tileContent, tileLayout, clearTabs, clearTile, updateEmptyState, setAllBroadcast, focusSession]() {
+        clearTabs();
+        clearTile();
+
+        if (state->viewMode == ViewMode::Tabs) {
+            for (TerminalSession *session : state->sessions) {
+                const int tabIndex = tabs->addTab(session->terminal, session->title);
+                session->terminal->setMinimumSize(0, 0);
+                session->terminal->show();
+                auto *checkBox = new BroadcastCheckBox(session, tabs);
+                checkBox->setAllChecked = [state, setAllBroadcast](bool checked) {
+                    setAllBroadcast(checked);
+                    state->renderCurrentView();
+                };
+                checkBox->focusSession = [focusSession, session]() {
+                    focusSession(session);
+                };
+                tabs->tabBar()->setTabButton(tabIndex, QTabBar::LeftSide, checkBox);
+            }
+        } else {
+            const int columns = tileColumns(state->sessions.count());
+            for (int index = 0; index < state->sessions.count(); ++index) {
+                TerminalSession *session = state->sessions.at(index);
+                auto *cell = new QWidget(tileContent);
+                auto *cellLayout = new QVBoxLayout(cell);
+                auto *header = new QWidget(cell);
+                auto *headerLayout = new QHBoxLayout(header);
+                auto *checkBox = new BroadcastCheckBox(session, header);
+                auto *title = new QLabel(session->title, header);
+
+                checkBox->setAllChecked = [state, setAllBroadcast](bool checked) {
+                    setAllBroadcast(checked);
+                    state->renderCurrentView();
+                };
+                checkBox->focusSession = [focusSession, session]() {
+                    focusSession(session);
+                };
+
+                headerLayout->setContentsMargins(0, 0, 0, 0);
+                headerLayout->addWidget(checkBox);
+                headerLayout->addWidget(title);
+                headerLayout->addStretch();
+
+                cellLayout->setContentsMargins(0, 0, 0, 0);
+                cellLayout->addWidget(header);
+                cellLayout->addWidget(session->terminal);
+                cellLayout->setStretch(0, 0);
+                cellLayout->setStretch(1, 1);
+
+                session->terminal->setMinimumSize(320, 180);
+                session->terminal->show();
+                cell->setMinimumSize(340, 220);
+
+                tileLayout->addWidget(cell, index / columns, index % columns);
+            }
+        }
+
+        updateEmptyState();
+    };
+
+    std::function<void(TerminalSession *)> closeSession = [state](TerminalSession *session) {
+        if (!session || !state->sessions.contains(session)) {
+            return;
+        }
+
+        state->sessions.removeAll(session);
+        QObject::disconnect(session->terminal, nullptr, nullptr, nullptr);
+        session->terminal->setParent(nullptr);
+        session->terminal->deleteLater();
+        delete session;
+        state->renderCurrentView();
+    };
+
+    auto currentSession = [state, tabs]() -> TerminalSession * {
+        if (state->viewMode == ViewMode::Tabs) {
+            return sessionForTerminal(state, qobject_cast<QTermWidget *>(tabs->currentWidget()));
+        }
+        return sessionFromFocusedWidget(state);
     };
 
     auto *nextTabShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Right), this);
-    connect(nextTabShortcut, &QShortcut::activated, this, [tabs]() {
-        if (tabs->count() > 0) {
+    connect(nextTabShortcut, &QShortcut::activated, this, [state, tabs, currentSession, focusSession]() {
+        if (state->viewMode == ViewMode::Tabs && tabs->count() > 0) {
             tabs->setCurrentIndex((tabs->currentIndex() + 1) % tabs->count());
+            return;
+        }
+
+        if (state->viewMode == ViewMode::Tile && !state->sessions.isEmpty()) {
+            TerminalSession *session = currentSession();
+            const int index = session ? state->sessions.indexOf(session) : -1;
+            focusSession(state->sessions.at((index + 1 + state->sessions.count()) % state->sessions.count()));
         }
     });
 
     auto *previousTabShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Left), this);
-    connect(previousTabShortcut, &QShortcut::activated, this, [tabs]() {
-        if (tabs->count() > 0) {
+    connect(previousTabShortcut, &QShortcut::activated, this, [state, tabs, currentSession, focusSession]() {
+        if (state->viewMode == ViewMode::Tabs && tabs->count() > 0) {
             tabs->setCurrentIndex((tabs->currentIndex() - 1 + tabs->count()) % tabs->count());
+            return;
+        }
+
+        if (state->viewMode == ViewMode::Tile && !state->sessions.isEmpty()) {
+            TerminalSession *session = currentSession();
+            const int index = session ? state->sessions.indexOf(session) : 0;
+            focusSession(state->sessions.at((index - 1 + state->sessions.count()) % state->sessions.count()));
         }
     });
 
     auto *toggleCurrentBroadcastShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Space), this);
-    connect(toggleCurrentBroadcastShortcut, &QShortcut::activated, this, [tabs]() {
-        auto *checkBox = broadcastCheckBox(tabs, tabs->currentIndex());
-        if (checkBox) {
-            checkBox->setChecked(!checkBox->isChecked());
+    connect(toggleCurrentBroadcastShortcut, &QShortcut::activated, this, [currentSession, state]() {
+        TerminalSession *session = currentSession();
+        if (session) {
+            session->broadcastEnabled = !session->broadcastEnabled;
+            state->renderCurrentView();
         }
     });
 
     auto *closeCurrentTabShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Delete), this);
-    connect(closeCurrentTabShortcut, &QShortcut::activated, this, [tabs, updateEmptyState]() {
-        const int index = tabs->currentIndex();
-        if (index == -1) {
-            return;
-        }
-
-        QWidget *widget = tabs->widget(index);
-        tabs->removeTab(index);
-        updateEmptyState();
-        if (widget) {
-            widget->deleteLater();
-        }
+    connect(closeCurrentTabShortcut, &QShortcut::activated, this, [currentSession, closeSession]() {
+        closeSession(currentSession());
     });
 
     QFont terminalFont = QApplication::font();
     terminalFont.setFamily(QStringLiteral("Monospace"));
     terminalFont.setPointSize(10);
 
-    auto createTerminal = [this, tabs, terminalFont, updateEmptyState](const QString &tabName = QStringLiteral("Terminal"),
-                                                                      const QString &program = QString(),
-                                                                      const QStringList &args = QStringList()) {
+    auto createTerminal = [this, state, terminalFont, closeSession](const QString &tabName = QStringLiteral("Terminal"),
+                                                                   const QString &program = QString(),
+                                                                   const QStringList &args = QStringList()) {
         const bool useCustomProgram = !program.isEmpty();
-        auto *terminal = new QTermWidget(useCustomProgram ? 0 : 1, tabs);
+        auto *terminal = new QTermWidget(useCustomProgram ? 0 : 1, this);
+        auto *session = new TerminalSession{terminal, tabName, true};
+        state->sessions.append(session);
+
         QFont font = terminalFont;
         terminal->setTerminalFont(font);
         terminal->setColorScheme(QStringLiteral("WhiteOnBlack"));
         terminal->setScrollBarPosition(QTermWidget::ScrollBarRight);
         terminal->setAutoClose(true);
 
-        const int tabIndex = tabs->addTab(terminal, tabName);
-        auto *broadcastCheckBox = new BroadcastCheckBox(tabs);
-        broadcastCheckBox->setChecked(true);
-        broadcastCheckBox->setToolTip(QStringLiteral("Receive broadcast input"));
-        tabs->tabBar()->setTabButton(tabIndex, QTabBar::LeftSide, broadcastCheckBox);
-        tabs->setCurrentIndex(tabIndex);
-        updateEmptyState();
-
-        connect(terminal, &QTermWidget::finished, this, [tabs, terminal, updateEmptyState]() {
-            const int tabIndex = tabs->indexOf(terminal);
-            if (tabIndex != -1) {
-                tabs->removeTab(tabIndex);
-            }
-            updateEmptyState();
-            terminal->deleteLater();
+        connect(terminal, &QTermWidget::finished, this, [session, closeSession]() {
+            closeSession(session);
         });
 
-        connect(terminal, &QTermWidget::termKeyPressed, this, [tabs, terminal](QKeyEvent *event) {
+        connect(terminal, &QTermWidget::termKeyPressed, this, [state, session](QKeyEvent *event) {
             static bool broadcasting = false;
-            if (broadcasting) {
-                return;
-            }
-
-            const int sourceIndex = tabs->indexOf(terminal);
-            if (sourceIndex == -1 || !shouldReceiveBroadcast(tabs, sourceIndex)) {
+            if (broadcasting || !session->broadcastEnabled) {
                 return;
             }
 
             broadcasting = true;
-            for (int index = 0; index < tabs->count(); ++index) {
-                auto *targetTerminal = qobject_cast<QTermWidget *>(tabs->widget(index));
-                if (!targetTerminal || targetTerminal == terminal || !shouldReceiveBroadcast(tabs, index)) {
+            for (TerminalSession *targetSession : state->sessions) {
+                if (targetSession == session || !targetSession->broadcastEnabled) {
                     continue;
                 }
 
@@ -270,10 +436,13 @@ MainWindow::MainWindow(QWidget *parent)
                                          event->text(),
                                          event->isAutoRepeat(),
                                          event->count());
-                targetTerminal->sendKeyEvent(&forwardedEvent);
+                targetSession->terminal->sendKeyEvent(&forwardedEvent);
             }
             broadcasting = false;
         });
+
+        state->renderCurrentView();
+        terminal->setFocus();
 
         if (useCustomProgram) {
             terminal->setShellProgram(program);
@@ -286,6 +455,27 @@ MainWindow::MainWindow(QWidget *parent)
 
     auto *fileMenu = menuBar()->addMenu(QStringLiteral("File"));
     fileMenu->addAction(QStringLiteral("Exit"), this, &QWidget::close);
+
+    auto *viewMenu = menuBar()->addMenu(QStringLiteral("View"));
+    auto *tabsViewAction = viewMenu->addAction(QStringLiteral("Tabs"));
+    tabsViewAction->setCheckable(true);
+    tabsViewAction->setChecked(true);
+    auto *tileViewAction = viewMenu->addAction(QStringLiteral("Tile All"));
+    tileViewAction->setCheckable(true);
+
+    connect(tabsViewAction, &QAction::triggered, this, [state, tabsViewAction, tileViewAction]() {
+        state->viewMode = ViewMode::Tabs;
+        tabsViewAction->setChecked(true);
+        tileViewAction->setChecked(false);
+        state->renderCurrentView();
+    });
+
+    connect(tileViewAction, &QAction::triggered, this, [state, tabsViewAction, tileViewAction]() {
+        state->viewMode = ViewMode::Tile;
+        tabsViewAction->setChecked(false);
+        tileViewAction->setChecked(true);
+        state->renderCurrentView();
+    });
 
     auto *hostsMenu = menuBar()->addMenu(QStringLiteral("Hosts"));
     const QList<SshHostEntry> hosts = readSshConfigHosts();
@@ -348,17 +538,14 @@ MainWindow::MainWindow(QWidget *parent)
             this,
             QStringLiteral("Shortcuts"),
             QStringLiteral(
-                "Ctrl+Right: next tab\n"
-                "Ctrl+Left: previous tab\n"
-                "Ctrl+Space: toggle broadcast checkbox for the current tab\n"
-                "Ctrl+Delete: close current tab\n"
-                "Click tab checkbox: toggle broadcast for that tab\n"
-                "Ctrl+Click tab checkbox: set all tab checkboxes to the same state"));
+                "Ctrl+Right: next tab (tabs view) or next terminal (tile view)\n"
+                "Ctrl+Left: previous tab (tabs view) or previous terminal (tile view)\n"
+                "Ctrl+Space: toggle broadcast checkbox for the current terminal\n"
+                "Ctrl+Delete: close current terminal\n"
+                "Click terminal checkbox: toggle broadcast for that terminal\n"
+                "Ctrl+Click terminal checkbox: set all checkboxes to the same state"));
     });
 
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->addWidget(tabs);
-    layout->addWidget(emptyLabel);
     updateEmptyState();
 
     setWindowTitle(QStringLiteral("mTerm"));
