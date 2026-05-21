@@ -824,7 +824,7 @@ MainWindow::MainWindow(QWidget *parent)
             QStringLiteral("About mTerm"),
             QStringLiteral("<h3>mTerm</h3>"
                            "<p>Version: %1</p>"
-                           "<p>A Qt/QTermWidget terminal manager for local and SSH sessions.</p>")
+                           "<p>A Qt/QTermWidget terminal broadcaster for running the same commands across multiple terminal sessions, including SSH connections.</p>")
                 .arg(QStringLiteral(MTERM_VERSION)));
     });
 

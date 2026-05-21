@@ -1,28 +1,33 @@
 # mTerm
 
-mTerm is a small Qt terminal manager built around QTermWidget. It is aimed at working with multiple local or SSH terminal sessions, especially when running the same command across several hosts.
+mTerm is a Qt/QTermWidget terminal broadcaster. Its main purpose is to run the same commands at the same time on multiple terminal sessions, including SSH connections, while still allowing individual terminals to be enabled or disabled for broadcast input.
+
+## Key Idea
+
+Open a set of hosts, select the terminals that should receive input, and type once. mTerm mirrors your keystrokes to every checked terminal. This is useful for administering groups of similar machines, comparing behavior across hosts, or running the same diagnostic commands on a fleet.
 
 ## Features
 
+- Broadcast typed input from one terminal to all checked terminals.
+- Per-terminal broadcast checkbox.
+- `Ctrl` + click on a checkbox sets all checkboxes to the same state.
 - Open a local terminal from `Hosts -> localhost`.
 - Read SSH hosts from `~/.ssh/config` and add them to the `Hosts` menu.
-- Support grouped SSH hosts with comments like:
+- Put one host in multiple menu groups with comments like:
 
 ```sshconfig
 Host pve1
-  #mGroup PVE
+  #mTerm Groups Monaco Proxmox
   Hostname 192.168.1.7
   User root
 ```
 
-This creates `Hosts -> PVE -> pve1` and `Hosts -> PVE -> Open All`.
+This creates both `Hosts -> Monaco -> pve1` and `Hosts -> Proxmox -> pve1`. Each group also gets an `Open All` action.
 
 - SSH host tabs start `ssh <host>` directly as the terminal process, so `exit` closes the tab instead of returning to a local shell.
 - Switch between tabbed view and tiled view with `View -> Tabs` and `View -> Tile All`.
-- Broadcast typed input from one terminal to other checked terminals.
-- Per-terminal broadcast checkbox.
-- `Ctrl` + click on a checkbox sets all checkboxes to the same state.
 - Active terminal is highlighted in tiled view.
+- Terminal titles can update from detected shell prompts such as `user@host:~$`.
 - Empty window message when no terminals are open.
 
 ## Shortcuts
@@ -40,24 +45,37 @@ On LMDE 7 / Debian 13 trixie:
 
 ```bash
 sudo apt update
-sudo apt install cmake ninja-build g++ qt6-base-dev qt6-tools-dev libqtermwidget-dev libutf8proc-dev
+sudo apt install cmake ninja-build g++ qt6-base-dev qt6-tools-dev libqtermwidget-dev libutf8proc-dev dpkg-dev
 ```
 
 ## Build
 
 ```bash
-cmake -S . -B build/manual -G Ninja
-cmake --build build/manual
+make release
+```
+
+## Debug Build
+
+```bash
+make debug
 ```
 
 ## Run
 
 ```bash
-./build/manual/mTerm
+make run
 ```
+
+## Debian Package
+
+```bash
+make deb
+```
+
+Packages are written to `build/packages` and include an OS-specific version suffix such as `linuxmint7` or `ubuntu2404`.
 
 ## Notes
 
 - Wildcard SSH host entries such as `Host *` or `Host *.example.com` are ignored in the menu.
-- Host grouping is read from `#mGroup <name>` comments inside a host block.
+- Host grouping is read from `#mTerm Groups <group> [group...]` comments inside a host block.
 - Broadcast is controlled by the checkbox shown next to each terminal title.
