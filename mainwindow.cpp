@@ -146,9 +146,14 @@ static bool isConcreteSshHost(const QString &host)
 
 static void addSshHostEntries(const QStringList &hosts,
                               const QStringList &groups,
+                              bool isMarkedForMTerm,
                               QSet<QString> *seen,
                               QList<SshHostEntry> *entries)
 {
+    if (!isMarkedForMTerm) {
+        return;
+    }
+
     for (const QString &host : hosts) {
         if (!isConcreteSshHost(host) || seen->contains(host)) {
             continue;
@@ -169,6 +174,7 @@ static QList<SshHostEntry> readSshConfigHosts()
     QList<SshHostEntry> entries;
     QStringList currentHosts;
     QStringList currentGroups;
+    bool currentMarkedForMTerm = false;
     QSet<QString> seen;
     QTextStream stream(&config);
     while (!stream.atEnd()) {
@@ -177,10 +183,13 @@ static QList<SshHostEntry> readSshConfigHosts()
             continue;
         }
 
-        static const QRegularExpression groupsRegex(QStringLiteral("^#\\s*mTerm\\s+Groups\\s+(.+)$"));
-        const QRegularExpressionMatch groupsMatch = groupsRegex.match(line);
-        if (groupsMatch.hasMatch()) {
-            currentGroups.append(groupsMatch.captured(1).split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts));
+        static const QRegularExpression mtermRegex(QStringLiteral("^#\\s*mTerm(?:\\s+Groups\\s+(.+))?\\s*$"));
+        const QRegularExpressionMatch mtermMatch = mtermRegex.match(line);
+        if (mtermMatch.hasMatch()) {
+            currentMarkedForMTerm = true;
+            if (mtermMatch.capturedLength(1) > 0) {
+                currentGroups.append(mtermMatch.captured(1).split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts));
+            }
             continue;
         }
 
@@ -198,12 +207,13 @@ static QList<SshHostEntry> readSshConfigHosts()
             continue;
         }
 
-        addSshHostEntries(currentHosts, currentGroups, &seen, &entries);
+        addSshHostEntries(currentHosts, currentGroups, currentMarkedForMTerm, &seen, &entries);
         currentHosts = parts.mid(1);
         currentGroups.clear();
+        currentMarkedForMTerm = false;
     }
 
-    addSshHostEntries(currentHosts, currentGroups, &seen, &entries);
+    addSshHostEntries(currentHosts, currentGroups, currentMarkedForMTerm, &seen, &entries);
 
     return entries;
 }

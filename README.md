@@ -12,17 +12,18 @@ Open a set of hosts, select the terminals that should receive input, and type on
 - Per-terminal broadcast checkbox.
 - `Ctrl` + click on a checkbox sets all checkboxes to the same state.
 - Open a local terminal from `Hosts -> localhost`.
-- Read SSH hosts from `~/.ssh/config` and add them to the `Hosts` menu.
-- Put one host in multiple menu groups with comments like:
+- Read marked SSH hosts from `~/.ssh/config` and add them to the `Hosts` menu.
+- Mark a host for mTerm with a `# mTerm` comment.
+- Put one marked host in multiple menu groups with comments like:
 
 ```sshconfig
-Host pve1
-  #mTerm Groups Monaco Proxmox
+Host otherHost
+  # mTerm Groups VPS Webserver
   Hostname 192.168.1.7
   User root
 ```
 
-This creates both `Hosts -> Monaco -> pve1` and `Hosts -> Proxmox -> pve1`. Each group also gets an `Open All` action.
+This creates both `Hosts -> VPS -> otherHost` and `Hosts -> Webserver -> otherHost`. Each group also gets an `Open All` action.
 
 - SSH host tabs start `ssh <host>` directly as the terminal process, so `exit` closes the tab instead of returning to a local shell.
 - Switch between tabbed view and tiled view with `View -> Tabs` and `View -> Tile All`.
@@ -77,5 +78,6 @@ Packages are written to `build/packages` and include an OS-specific version suff
 ## Notes
 
 - Wildcard SSH host entries such as `Host *` or `Host *.example.com` are ignored in the menu.
-- Host grouping is read from `#mTerm Groups <group> [group...]` comments inside a host block.
+- SSH hosts are only added to the menu when their host block contains a `# mTerm` marker.
+- Host grouping is read from `# mTerm Groups <group> [group...]` comments inside a marked host block.
 - Broadcast is controlled by the checkbox shown next to each terminal title.
