@@ -134,7 +134,7 @@ private:
 struct SshHostEntry
 {
     QString host;
-    QString group;
+    QStringList groups;
 };
 
 static bool isConcreteSshHost(const QString &host)
@@ -145,7 +145,7 @@ static bool isConcreteSshHost(const QString &host)
 }
 
 static void addSshHostEntries(const QStringList &hosts,
-                              const QString &group,
+                              const QStringList &groups,
                               QSet<QString> *seen,
                               QList<SshHostEntry> *entries)
 {
@@ -155,7 +155,7 @@ static void addSshHostEntries(const QStringList &hosts,
         }
 
         seen->insert(host);
-        entries->append({host, group});
+        entries->append({host, groups});
     }
 }
 
@@ -168,7 +168,7 @@ static QList<SshHostEntry> readSshConfigHosts()
 
     QList<SshHostEntry> entries;
     QStringList currentHosts;
-    QString currentGroup;
+    QStringList currentGroups;
     QSet<QString> seen;
     QTextStream stream(&config);
     while (!stream.atEnd()) {
@@ -177,8 +177,10 @@ static QList<SshHostEntry> readSshConfigHosts()
             continue;
         }
 
-        if (line.startsWith(QStringLiteral("#mGroup"))) {
-            currentGroup = line.mid(QStringLiteral("#mGroup").size()).trimmed();
+        static const QRegularExpression groupsRegex(QStringLiteral("^#\\s*mTerm\\s+Groups\\s+(.+)$"));
+        const QRegularExpressionMatch groupsMatch = groupsRegex.match(line);
+        if (groupsMatch.hasMatch()) {
+            currentGroups.append(groupsMatch.captured(1).split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts));
             continue;
         }
 
@@ -196,12 +198,12 @@ static QList<SshHostEntry> readSshConfigHosts()
             continue;
         }
 
-        addSshHostEntries(currentHosts, currentGroup, &seen, &entries);
+        addSshHostEntries(currentHosts, currentGroups, &seen, &entries);
         currentHosts = parts.mid(1);
-        currentGroup.clear();
+        currentGroups.clear();
     }
 
-    addSshHostEntries(currentHosts, currentGroup, &seen, &entries);
+    addSshHostEntries(currentHosts, currentGroups, &seen, &entries);
 
     return entries;
 }
@@ -764,8 +766,8 @@ MainWindow::MainWindow(QWidget *parent)
     QMap<QString, QMenu *> groupMenus;
     QMap<QString, QStringList> groupHosts;
     for (const SshHostEntry &entry : hosts) {
-        if (!entry.group.isEmpty()) {
-            groupHosts[entry.group].append(entry.host);
+        for (const QString &group : entry.groups) {
+            groupHosts[group].append(entry.host);
         }
     }
 
@@ -788,29 +790,31 @@ MainWindow::MainWindow(QWidget *parent)
     };
 
     for (const SshHostEntry &entry : hosts) {
-        if (entry.group.isEmpty()) {
+        if (entry.groups.isEmpty()) {
             addHostAction(hostsMenu, entry.host);
             continue;
         }
 
-        QMenu *groupMenu = groupMenus.value(entry.group, nullptr);
-        if (!groupMenu) {
-            groupMenu = hostsMenu->addMenu(entry.group);
-            groupMenus.insert(entry.group, groupMenu);
+        for (const QString &entryGroup : entry.groups) {
+            QMenu *groupMenu = groupMenus.value(entryGroup, nullptr);
+            if (!groupMenu) {
+                groupMenu = hostsMenu->addMenu(entryGroup);
+                groupMenus.insert(entryGroup, groupMenu);
 
-            const QString group = entry.group;
-            auto openGroup = [group, groupHosts, openHost]() {
-                const QStringList hosts = groupHosts.value(group);
-                for (const QString &host : hosts) {
-                    openHost(host);
-                }
-            };
+                const QString group = entryGroup;
+                auto openGroup = [group, groupHosts, openHost]() {
+                    const QStringList hosts = groupHosts.value(group);
+                    for (const QString &host : hosts) {
+                        openHost(host);
+                    }
+                };
 
-            groupMenu->addAction(QStringLiteral("Open All"), this, openGroup);
-            groupMenu->addSeparator();
+                groupMenu->addAction(QStringLiteral("Open All"), this, openGroup);
+                groupMenu->addSeparator();
+            }
+
+            addHostAction(groupMenu, entry.host);
         }
-
-        addHostAction(groupMenu, entry.host);
     }
 
     auto *helpMenu = menuBar()->addMenu(QStringLiteral("Help"));
