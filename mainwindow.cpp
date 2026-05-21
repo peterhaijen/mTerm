@@ -333,6 +333,42 @@ static QString detectedPromptTitle(const QString &text)
     return {};
 }
 
+static QString shellSingleQuote(QString text)
+{
+    text.replace(QStringLiteral("'"), QStringLiteral("'\"'\"'"));
+    return QStringLiteral("'") + text + QStringLiteral("'");
+}
+
+static QString sshLauncherScript(const QString &host)
+{
+    const QString quotedHost = shellSingleQuote(host);
+    return QStringLiteral("ssh ")
+        + quotedHost
+        + QStringLiteral(
+              "\n"
+              "status=$?\n"
+              "if [ \"$status\" -eq 0 ]; then\n"
+              "    exit 0\n"
+              "fi\n"
+              "\n"
+              "printf '\\nSSH exited with status %s. Press any key within 10 seconds to keep this tab open.\\n' \"$status\"\n"
+              "remaining=10\n"
+              "while [ \"$remaining\" -gt 0 ]; do\n"
+              "    filled=$((11 - remaining))\n"
+              "    empty=$((10 - filled))\n"
+              "    bar=$(printf '%*s' \"$filled\" '' | tr ' ' '#')\n"
+              "    spaces=$(printf '%*s' \"$empty\" '')\n"
+              "    printf '\\rClosing in %2d seconds [%s%s] ' \"$remaining\" \"$bar\" \"$spaces\"\n"
+              "    if IFS= read -r -s -n 1 -t 1 _keep_open; then\n"
+              "        printf '\\nKeeping tab open.\\n'\n"
+              "        exec /bin/bash -i\n"
+              "    fi\n"
+              "    remaining=$((remaining - 1))\n"
+              "done\n"
+              "printf '\\n'\n"
+              "exit \"$status\"\n");
+}
+
 static bool processExists(int pid)
 {
     return pid > 0 && (kill(pid, 0) == 0 || errno == EPERM);
@@ -782,7 +818,7 @@ MainWindow::MainWindow(QWidget *parent)
     }
 
     auto openHost = [createTerminal](const QString &host) {
-        createTerminal(host, QStringLiteral("ssh"), QStringList{host});
+        createTerminal(host, QStringLiteral("/bin/bash"), QStringList{QStringLiteral("-lc"), sshLauncherScript(host)});
     };
 
     hostsMenu->addAction(QStringLiteral("localhost"), this, [createTerminal]() {

@@ -25,7 +25,7 @@ Host otherHost
 
 This creates both `Hosts -> VPS -> otherHost` and `Hosts -> Webserver -> otherHost`. Each group also gets an `Open All` action.
 
-- SSH host tabs start `ssh <host>` directly as the terminal process, so `exit` closes the tab instead of returning to a local shell.
+- SSH host tabs run through a small shell wrapper: a successful SSH exit closes the tab immediately, and a failed SSH exit shows a 10-second countdown in the terminal. Press any key during the countdown to keep the tab open in a local shell.
 - Switch between tabbed view and tiled view with `View -> Tabs` and `View -> Tile All`.
 - Active terminal is highlighted in tiled view.
 - Terminal titles can update from detected shell prompts such as `user@host:~$`.
