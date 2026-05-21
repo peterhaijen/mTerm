@@ -14,12 +14,25 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets LinguistTools)
 find_package(qtermwidget${QT_VERSION_MAJOR} REQUIRED)
 
 set(TS_FILES mTerm_en_US.ts)
+set(VERSION_HEADER ${CMAKE_CURRENT_BINARY_DIR}/generated/version.h)
+set_source_files_properties(${VERSION_HEADER} PROPERTIES GENERATED TRUE)
 
 set(PROJECT_SOURCES
         main.cpp
         mainwindow.cpp
         mainwindow.h
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/version.h
         ${TS_FILES}
+)
+
+add_custom_target(generate_version ALL
+    COMMAND ${CMAKE_COMMAND}
+        -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DOUTPUT_FILE=${VERSION_HEADER}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateVersion.cmake
+    BYPRODUCTS ${VERSION_HEADER}
+    COMMENT "Generating version header"
+    VERBATIM
 )
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
@@ -53,6 +66,9 @@ target_link_libraries(mTerm PRIVATE
     Qt${QT_VERSION_MAJOR}::Widgets
     qtermwidget${QT_VERSION_MAJOR}
 )
+
+add_dependencies(mTerm generate_version)
+target_include_directories(mTerm PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 
 # Qt for iOS sets MACOSX_BUNDLE_GUI_IDENTIFIER automatically since Qt 6.1.
 # If you are developing for iOS or macOS you should consider setting an

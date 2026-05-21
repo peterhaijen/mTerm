@@ -27,6 +27,8 @@
 #include <QWidget>
 #include <qtermwidget.h>
 
+#include "version.h"
+
 #include <functional>
 
 struct TerminalSession
@@ -644,6 +646,16 @@ MainWindow::MainWindow(QWidget *parent)
     }
 
     auto *helpMenu = menuBar()->addMenu(QStringLiteral("Help"));
+    helpMenu->addAction(QStringLiteral("About"), this, [this]() {
+        QMessageBox::about(
+            this,
+            QStringLiteral("About mTerm"),
+            QStringLiteral("<h3>mTerm</h3>"
+                           "<p>Version: %1</p>"
+                           "<p>A Qt/QTermWidget terminal manager for local and SSH sessions.</p>")
+                .arg(QStringLiteral(MTERM_VERSION)));
+    });
+
     helpMenu->addAction(QStringLiteral("Shortcuts"), this, [this]() {
         QMessageBox::information(
             this,
