@@ -992,6 +992,27 @@ MainWindow::MainWindow(QWidget *parent)
                 .arg(QStringLiteral(MTERM_VERSION)));
     });
 
+    helpMenu->addAction(QStringLiteral("Adding Hosts"), this, [this]() {
+        QMessageBox::information(
+            this,
+            QStringLiteral("Adding Hosts"),
+            QStringLiteral(
+                "mTerm reads hosts from ~/.ssh/config.\n"
+                "\n"
+                "Only Host blocks marked with '# mTerm' are added to the Hosts menu.\n"
+                "\n"
+                "Example:\n"
+                "Host webserver\n"
+                "  # mTerm Groups Webserver\n"
+                "  Hostname 10.0.0.11\n"
+                "\n"
+                "To place a host in multiple groups, add a line like:\n"
+                "  # mTerm Groups VPS Webserver\n"
+                "\n"
+                "Groups are used to build nested submenus under Hosts.\n"
+                "Wildcard entries (like 'Host *') are ignored."));
+    });
+
     helpMenu->addAction(QStringLiteral("Shortcuts"), this, [this]() {
         QMessageBox::information(
             this,
