@@ -51,7 +51,7 @@ enum class ViewMode { Tabs, Tile };
 struct TerminalUiState
 {
     QList<TerminalSession *> sessions;
-    ViewMode viewMode = ViewMode::Tabs;
+    ViewMode viewMode = ViewMode::Tile;
     std::function<void()> renderCurrentView;
     std::function<void(TerminalSession *)> setActiveSession;
     std::function<void(TerminalSession *)> closeSession;
@@ -444,11 +444,20 @@ MainWindow::MainWindow(QWidget *parent)
     auto *tileScroll = new QScrollArea(central);
     auto *tileContent = new QWidget(tileScroll);
     auto *tileLayout = new QGridLayout(tileContent);
-    auto *emptyLabel = new QLabel(QStringLiteral("No terminals open"), central);
+    auto *emptyLabel = new QLabel(
+        QStringLiteral(
+            "<div style='text-align:center; line-height:1.35;'>"
+            "<p><b>mTerm</b> broadcasts your keystrokes to multiple terminals at once.</p>"
+            "<p>Open terminals from the <b>Hosts</b> menu, then use the checkboxes to choose which sessions receive shared input.</p>"
+            "<p style='color:#c62828;'><b>Warning:</b> work carefully. One bad command can hit many systems very fast.</p>"
+            "<p style='color:#c62828;'>I take no responsibility if something breaks; if it breaks, you get to keep both pieces :)</p>"
+            "</div>"),
+        central);
     auto *tileHeaders = new QMap<TerminalSession *, QWidget *>;
     auto *tileTitles = new QMap<TerminalSession *, QLabel *>;
 
     emptyLabel->setAlignment(Qt::AlignCenter);
+    emptyLabel->setWordWrap(true);
     tileScroll->setWidget(tileContent);
     tileScroll->setWidgetResizable(true);
     tileLayout->setContentsMargins(6, 6, 6, 6);
@@ -825,9 +834,10 @@ MainWindow::MainWindow(QWidget *parent)
     auto *viewMenu = menuBar()->addMenu(QStringLiteral("View"));
     auto *tabsViewAction = viewMenu->addAction(QStringLiteral("Tabs"));
     tabsViewAction->setCheckable(true);
-    tabsViewAction->setChecked(true);
+    tabsViewAction->setChecked(false);
     auto *tileViewAction = viewMenu->addAction(QStringLiteral("Tile All"));
     tileViewAction->setCheckable(true);
+    tileViewAction->setChecked(true);
 
     connect(tabsViewAction, &QAction::triggered, this, [state, tabsViewAction, tileViewAction]() {
         state->viewMode = ViewMode::Tabs;
