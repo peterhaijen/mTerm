@@ -3,6 +3,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QCoreApplication>
 #include <QDir>
 #include <QEvent>
 #include <QFile>
@@ -23,13 +24,16 @@
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTextStream>
+#include <QThread>
 #include <QVBoxLayout>
 #include <QWidget>
 #include <qtermwidget.h>
 
 #include "version.h"
 
+#include <cerrno>
 #include <functional>
+#include <signal.h>
 
 struct TerminalSession
 {
@@ -37,6 +41,7 @@ struct TerminalSession
     QString title;
     bool broadcastEnabled = true;
     bool hasFocus = false;
+    bool isPrompt = false;
 };
 
 enum class ViewMode { Tabs, Tile };
@@ -237,11 +242,144 @@ static int tileColumns(int count)
     return 4;
 }
 
+static QString printableAscii(const QString &text)
+{
+    QString result;
+    result.reserve(text.size());
+
+    for (const QChar character : text) {
+        const ushort value = character.unicode();
+        if (value == '\r' || value == '\n' || value == '\t' || (value >= 0x20 && value <= 0x7e)) {
+            result.append(QChar(value));
+        }
+    }
+
+    return result;
+}
+
+static QString stripTerminalEscapes(const QString &text)
+{
+    QString result;
+    result.reserve(text.size());
+
+    for (int index = 0; index < text.size(); ++index) {
+        const QChar character = text.at(index);
+        if (character != QChar(0x1b)) {
+            result.append(character);
+            continue;
+        }
+
+        if (index + 1 >= text.size()) {
+            break;
+        }
+
+        const QChar next = text.at(++index);
+        if (next == QLatin1Char(']')) {
+            while (index + 1 < text.size()) {
+                ++index;
+                if (text.at(index) == QChar(0x07)) {
+                    break;
+                }
+                if (text.at(index) == QChar(0x1b) && index + 1 < text.size() && text.at(index + 1) == QLatin1Char('\\')) {
+                    ++index;
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if (next == QLatin1Char('[')) {
+            while (index + 1 < text.size()) {
+                ++index;
+                const ushort value = text.at(index).unicode();
+                if (value >= 0x40 && value <= 0x7e) {
+                    break;
+                }
+            }
+            continue;
+        }
+    }
+
+    return result;
+}
+
+static QString detectedPromptTitle(const QString &text)
+{
+    static const QRegularExpression promptRegex(QStringLiteral("([A-Za-z0-9._-]+@[A-Za-z0-9._-]+):[^\\r\\n]*[#$] $"));
+    static constexpr qsizetype minimumPromptLength = 7;
+    const QString ascii = printableAscii(stripTerminalEscapes(text));
+
+    if (ascii.size() < minimumPromptLength) {
+        return {};
+    }
+
+    const QRegularExpressionMatch match = promptRegex.match(ascii);
+    if (match.hasMatch()) {
+        return match.captured(1);
+    }
+
+    return {};
+}
+
+static bool processExists(int pid)
+{
+    return pid > 0 && (kill(pid, 0) == 0 || errno == EPERM);
+}
+
+static void signalTerminalProcess(QTermWidget *terminal, int signalNumber)
+{
+    const int pid = terminal ? terminal->getShellPID() : -1;
+    if (pid <= 0) {
+        return;
+    }
+
+    // QTermWidget starts the shell/ssh as the session process. Try the process
+    // group first so children of the shell are also notified, then the process.
+    kill(-pid, signalNumber);
+    kill(pid, signalNumber);
+}
+
+static void stopTerminalProcess(QTermWidget *terminal)
+{
+    const int pid = terminal ? terminal->getShellPID() : -1;
+    if (pid <= 0 || !processExists(pid)) {
+        return;
+    }
+
+    signalTerminalProcess(terminal, SIGHUP);
+    for (int i = 0; i < 20 && processExists(pid); ++i) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(10);
+    }
+
+    if (!processExists(pid)) {
+        return;
+    }
+
+    signalTerminalProcess(terminal, SIGTERM);
+    for (int i = 0; i < 20 && processExists(pid); ++i) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(10);
+    }
+
+    if (processExists(pid)) {
+        signalTerminalProcess(terminal, SIGKILL);
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    }
+}
+
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     auto *state = new TerminalUiState;
     qApp->installEventFilter(new TerminalFocusFilter(state, this));
+    connect(qApp, &QCoreApplication::aboutToQuit, this, [state]() {
+        for (TerminalSession *session : state->sessions) {
+            if (session->terminal) {
+                stopTerminalProcess(session->terminal);
+            }
+        }
+    });
     connect(this, &QObject::destroyed, this, [state]() {
         for (TerminalSession *session : state->sessions) {
             delete session;
@@ -257,6 +395,7 @@ MainWindow::MainWindow(QWidget *parent)
     auto *tileLayout = new QGridLayout(tileContent);
     auto *emptyLabel = new QLabel(QStringLiteral("No terminals open"), central);
     auto *tileHeaders = new QMap<TerminalSession *, QWidget *>;
+    auto *tileTitles = new QMap<TerminalSession *, QLabel *>;
 
     emptyLabel->setAlignment(Qt::AlignCenter);
     tileScroll->setWidget(tileContent);
@@ -322,8 +461,9 @@ MainWindow::MainWindow(QWidget *parent)
         }
     };
 
-    auto clearTile = [state, tileLayout, tileHeaders]() {
+    auto clearTile = [state, tileLayout, tileHeaders, tileTitles]() {
         tileHeaders->clear();
+        tileTitles->clear();
 
         for (TerminalSession *session : state->sessions) {
             session->terminal->setParent(nullptr);
@@ -356,7 +496,7 @@ MainWindow::MainWindow(QWidget *parent)
         session->terminal->setFocus();
     };
 
-    state->renderCurrentView = [state, tabs, tileContent, tileLayout, tileHeaders, clearTabs, clearTile, updateEmptyState, setAllBroadcast, focusSession]() {
+    state->renderCurrentView = [state, tabs, tileContent, tileLayout, tileHeaders, tileTitles, clearTabs, clearTile, updateEmptyState, setAllBroadcast, focusSession]() {
         clearTabs();
         clearTile();
 
@@ -390,6 +530,7 @@ MainWindow::MainWindow(QWidget *parent)
                                           ? QStringLiteral("background-color: #2f6fed; color: white; padding: 3px;")
                                           : QStringLiteral("background-color: #3a3a3a; color: white; padding: 3px;"));
                 tileHeaders->insert(session, header);
+                tileTitles->insert(session, title);
 
                 checkBox->setAllChecked = [state, setAllBroadcast](bool checked) {
                     setAllBroadcast(checked);
@@ -429,6 +570,7 @@ MainWindow::MainWindow(QWidget *parent)
         const int closedIndex = state->sessions.indexOf(session);
         state->sessions.removeAll(session);
         QObject::disconnect(session->terminal, nullptr, nullptr, nullptr);
+        stopTerminalProcess(session->terminal);
         session->terminal->setParent(nullptr);
         session->terminal->deleteLater();
         delete session;
@@ -462,6 +604,23 @@ MainWindow::MainWindow(QWidget *parent)
         }
 
         return nullptr;
+    };
+
+    auto updateSessionTitle = [tabs, tileTitles](TerminalSession *session, const QString &title) {
+        if (!session || session->title == title) {
+            return;
+        }
+
+        session->title = title;
+
+        const int tabIndex = tabs->indexOf(session->terminal);
+        if (tabIndex != -1) {
+            tabs->setTabText(tabIndex, title);
+        }
+
+        if (auto *tileTitle = tileTitles->value(session, nullptr)) {
+            tileTitle->setText(title);
+        }
     };
 
     auto *nextTabShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Right), this);
@@ -510,9 +669,9 @@ MainWindow::MainWindow(QWidget *parent)
     terminalFont.setFamily(QStringLiteral("Monospace"));
     terminalFont.setPointSize(10);
 
-    auto createTerminal = [this, state, terminalFont, closeSession](const QString &tabName = QStringLiteral("Terminal"),
-                                                                   const QString &program = QString(),
-                                                                   const QStringList &args = QStringList()) {
+    auto createTerminal = [this, state, terminalFont, closeSession, updateSessionTitle](const QString &tabName = QStringLiteral("Terminal"),
+                                                                                       const QString &program = QString(),
+                                                                                       const QStringList &args = QStringList()) {
         const bool useCustomProgram = !program.isEmpty();
         auto *terminal = new QTermWidget(useCustomProgram ? 0 : 1, this);
         auto *session = new TerminalSession{terminal, tabName, true, true};
@@ -552,6 +711,15 @@ MainWindow::MainWindow(QWidget *parent)
                 targetSession->terminal->sendKeyEvent(&forwardedEvent);
             }
             broadcasting = false;
+        });
+
+        connect(terminal, &QTermWidget::receivedData, this, [session, updateSessionTitle](const QString &text) {
+            session->isPrompt = false;
+            const QString promptTitle = detectedPromptTitle(text);
+            if (!promptTitle.isEmpty()) {
+                session->isPrompt = true;
+                updateSessionTitle(session, promptTitle);
+            }
         });
 
         state->renderCurrentView();
