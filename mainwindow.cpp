@@ -25,6 +25,7 @@
 #include <QTabWidget>
 #include <QTextStream>
 #include <QThread>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
 #include <qtermwidget.h>
@@ -52,6 +53,7 @@ struct TerminalUiState
     ViewMode viewMode = ViewMode::Tabs;
     std::function<void()> renderCurrentView;
     std::function<void(TerminalSession *)> setActiveSession;
+    std::function<void(TerminalSession *)> closeSession;
 };
 
 static TerminalSession *sessionForTerminal(TerminalUiState *state, QTermWidget *terminal);
@@ -553,7 +555,20 @@ MainWindow::MainWindow(QWidget *parent)
                 const int tabIndex = tabs->addTab(session->terminal, session->title);
                 session->terminal->setMinimumSize(0, 0);
                 session->terminal->show();
+                auto *tabHeader = new QWidget(tabs);
+                auto *tabHeaderLayout = new QHBoxLayout(tabHeader);
                 auto *checkBox = new BroadcastCheckBox(session, tabs);
+                auto *closeButton = new QToolButton(tabs);
+
+                tabHeaderLayout->setContentsMargins(0, 0, 0, 0);
+                tabHeaderLayout->setSpacing(4);
+                tabHeaderLayout->addWidget(checkBox);
+                tabHeaderLayout->addWidget(closeButton);
+                closeButton->setText(QStringLiteral("x"));
+                closeButton->setAutoRaise(true);
+                closeButton->setToolTip(QStringLiteral("Close terminal"));
+                closeButton->setFixedSize(16, 16);
+
                 checkBox->setAllChecked = [state, setAllBroadcast](bool checked) {
                     setAllBroadcast(checked);
                     state->renderCurrentView();
@@ -561,7 +576,13 @@ MainWindow::MainWindow(QWidget *parent)
                 checkBox->focusSession = [focusSession, session]() {
                     focusSession(session);
                 };
-                tabs->tabBar()->setTabButton(tabIndex, QTabBar::LeftSide, checkBox);
+                QObject::connect(closeButton, &QToolButton::clicked, tabs, [state, session]() {
+                    if (state->closeSession) {
+                        state->closeSession(session);
+                    }
+                });
+
+                tabs->tabBar()->setTabButton(tabIndex, QTabBar::LeftSide, tabHeader);
             }
         } else {
             const int columns = tileColumns(state->sessions.count());
@@ -573,6 +594,7 @@ MainWindow::MainWindow(QWidget *parent)
                 auto *headerLayout = new QHBoxLayout(header);
                 auto *checkBox = new BroadcastCheckBox(session, header);
                 auto *title = new QLabel(session->title, header);
+                auto *closeButton = new QToolButton(header);
 
                 header->setStyleSheet(session->hasFocus
                                           ? QStringLiteral("background-color: #2f6fed; color: white; padding: 3px;")
@@ -592,6 +614,16 @@ MainWindow::MainWindow(QWidget *parent)
                 headerLayout->addWidget(checkBox);
                 headerLayout->addWidget(title);
                 headerLayout->addStretch();
+                headerLayout->addWidget(closeButton);
+                closeButton->setText(QStringLiteral("x"));
+                closeButton->setAutoRaise(true);
+                closeButton->setToolTip(QStringLiteral("Close terminal"));
+                closeButton->setFixedSize(16, 16);
+                QObject::connect(closeButton, &QToolButton::clicked, header, [state, session]() {
+                    if (state->closeSession) {
+                        state->closeSession(session);
+                    }
+                });
 
                 cellLayout->setContentsMargins(0, 0, 0, 0);
                 cellLayout->addWidget(header);
@@ -610,7 +642,7 @@ MainWindow::MainWindow(QWidget *parent)
         updateEmptyState();
     };
 
-    std::function<void(TerminalSession *)> closeSession = [state](TerminalSession *session) {
+    state->closeSession = [state](TerminalSession *session) {
         if (!session || !state->sessions.contains(session)) {
             return;
         }
@@ -709,15 +741,17 @@ MainWindow::MainWindow(QWidget *parent)
     });
 
     auto *closeCurrentTabShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Delete), this);
-    connect(closeCurrentTabShortcut, &QShortcut::activated, this, [currentSession, closeSession]() {
-        closeSession(currentSession());
+    connect(closeCurrentTabShortcut, &QShortcut::activated, this, [currentSession, state]() {
+        if (state->closeSession) {
+            state->closeSession(currentSession());
+        }
     });
 
     QFont terminalFont = QApplication::font();
     terminalFont.setFamily(QStringLiteral("Monospace"));
     terminalFont.setPointSize(10);
 
-    auto createTerminal = [this, state, terminalFont, closeSession, updateSessionTitle](const QString &tabName = QStringLiteral("Terminal"),
+    auto createTerminal = [this, state, terminalFont, updateSessionTitle](const QString &tabName = QStringLiteral("Terminal"),
                                                                                        const QString &program = QString(),
                                                                                        const QStringList &args = QStringList()) {
         const bool useCustomProgram = !program.isEmpty();
@@ -734,8 +768,10 @@ MainWindow::MainWindow(QWidget *parent)
         terminal->setScrollBarPosition(QTermWidget::ScrollBarRight);
         terminal->setAutoClose(true);
 
-        connect(terminal, &QTermWidget::finished, this, [session, closeSession]() {
-            closeSession(session);
+        connect(terminal, &QTermWidget::finished, this, [session, state]() {
+            if (state->closeSession) {
+                state->closeSession(session);
+            }
         });
 
         connect(terminal, &QTermWidget::termKeyPressed, this, [state, session](QKeyEvent *event) {
