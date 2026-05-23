@@ -5,8 +5,10 @@
 #include <QCheckBox>
 #include <QCoreApplication>
 #include <QDir>
+#include <QDirIterator>
 #include <QEvent>
 #include <QFile>
+#include <QFileInfo>
 #include <QFileSystemWatcher>
 #include <QFont>
 #include <QGridLayout>
@@ -22,6 +24,7 @@
 #include <QScrollArea>
 #include <QSet>
 #include <QShortcut>
+#include <QStatusBar>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTextStream>
@@ -35,6 +38,7 @@
 
 #include "version.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <functional>
 #include <signal.h>
@@ -142,6 +146,12 @@ struct SshHostEntry
     QStringList groups;
 };
 
+struct TaskFileEntry
+{
+    QString title;
+    QString path;
+};
+
 static bool isConcreteSshHost(const QString &host)
 {
     return !host.startsWith(QLatin1Char('!'))
@@ -221,6 +231,177 @@ static QList<SshHostEntry> readSshConfigHosts()
     addSshHostEntries(currentHosts, currentGroups, currentMarkedForMTerm, &seen, &entries);
 
     return entries;
+}
+
+static QString normalizedYamlValue(QString value)
+{
+    value = value.trimmed();
+    if ((value.startsWith(QLatin1Char('\'')) && value.endsWith(QLatin1Char('\'')))
+        || (value.startsWith(QLatin1Char('"')) && value.endsWith(QLatin1Char('"')))) {
+        value = value.mid(1, value.size() - 2);
+    }
+    return value.trimmed();
+}
+
+static QString markdownTaskTitle(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return {};
+    }
+
+    QTextStream stream(&file);
+    if (stream.atEnd() || stream.readLine().trimmed() != QStringLiteral("---")) {
+        return {};
+    }
+
+    bool hasMTermTag = false;
+    QString description;
+    bool inTags = false;
+    while (!stream.atEnd()) {
+        const QString line = stream.readLine();
+        const QString trimmed = line.trimmed();
+
+        if (trimmed == QStringLiteral("---")) {
+            if (hasMTermTag) {
+                return description.isEmpty() ? QFileInfo(path).completeBaseName() : description;
+            }
+            return {};
+        }
+
+        static const QRegularExpression descriptionRegex(QStringLiteral("^description\\s*:\\s*(.*)$"),
+                                                         QRegularExpression::CaseInsensitiveOption);
+        const QRegularExpressionMatch descriptionMatch = descriptionRegex.match(trimmed);
+        if (descriptionMatch.hasMatch()) {
+            description = normalizedYamlValue(descriptionMatch.captured(1));
+            const int commentIndex = description.indexOf(QLatin1Char('#'));
+            if (commentIndex != -1) {
+                description = normalizedYamlValue(description.left(commentIndex));
+            }
+            continue;
+        }
+
+        if (trimmed == QStringLiteral("tags:")) {
+            inTags = true;
+            continue;
+        }
+
+        if (!inTags) {
+            continue;
+        }
+
+        if (!line.isEmpty()
+            && !line.at(0).isSpace()
+            && !trimmed.startsWith(QLatin1Char('-'))) {
+            inTags = false;
+            continue;
+        }
+
+        if (!trimmed.startsWith(QLatin1Char('-'))) {
+            continue;
+        }
+
+        QString value = normalizedYamlValue(trimmed.mid(1));
+        const int commentIndex = value.indexOf(QLatin1Char('#'));
+        if (commentIndex != -1) {
+            value = normalizedYamlValue(value.left(commentIndex));
+        }
+
+        if (value.compare(QStringLiteral("mterm"), Qt::CaseInsensitive) == 0) {
+            hasMTermTag = true;
+        }
+    }
+
+    return {};
+}
+
+static QList<TaskFileEntry> readVaultTaskFiles()
+{
+    const QString vaultPath = QDir::home().filePath(QStringLiteral("vault33"));
+    QDir vaultDirectory(vaultPath);
+    if (!vaultDirectory.exists()) {
+        return {};
+    }
+
+    QList<TaskFileEntry> entries;
+    QDirIterator iterator(vaultPath,
+                          QStringList{QStringLiteral("*.md")},
+                          QDir::Files,
+                          QDirIterator::Subdirectories);
+    while (iterator.hasNext()) {
+        const QString path = iterator.next();
+        const QString taskTitle = markdownTaskTitle(path);
+        if (!taskTitle.isEmpty()) {
+            const QFileInfo fileInfo(path);
+            entries.append({taskTitle, fileInfo.absoluteFilePath()});
+        }
+    }
+
+    std::sort(entries.begin(), entries.end(), [](const TaskFileEntry &left, const TaskFileEntry &right) {
+        return QString::localeAwareCompare(left.title, right.title) < 0;
+    });
+
+    return entries;
+}
+
+static QStringList readMarkdownCommandBlocks(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return {};
+    }
+
+    QStringList commandBlocks;
+    QStringList currentBlock;
+    bool inCodeBlock = false;
+
+    QTextStream stream(&file);
+    while (!stream.atEnd()) {
+        const QString line = stream.readLine();
+        if (line.trimmed().startsWith(QStringLiteral("```"))) {
+            if (inCodeBlock) {
+                commandBlocks.append(currentBlock.join(QLatin1Char('\n')));
+                currentBlock.clear();
+                inCodeBlock = false;
+            } else {
+                inCodeBlock = true;
+            }
+            continue;
+        }
+
+        if (inCodeBlock) {
+            currentBlock.append(line);
+        }
+    }
+
+    return commandBlocks;
+}
+
+static QString taskInjectionText(const QStringList &commandBlocks)
+{
+    const QString commands = commandBlocks.join(QStringLiteral("\n\n"));
+    QString delimiter = QStringLiteral("MTERM_TASK_EOF");
+    int suffix = 1;
+    while (commands.split(QLatin1Char('\n')).contains(delimiter)) {
+        delimiter = QStringLiteral("MTERM_TASK_EOF_%1").arg(suffix++);
+    }
+
+    QString injection;
+    QTextStream stream(&injection);
+    stream << "mterm_task=$(mktemp) || exit\n";
+    stream << "cat > \"$mterm_task\" <<'" << delimiter << "'\n";
+    stream << "trap 'rm -f \"$0\"' EXIT\n";
+    stream << commands;
+    if (!commands.endsWith(QLatin1Char('\n'))) {
+        stream << "\n";
+    }
+    stream << "mterm_status=$?\n";
+    stream << "printf '\\nmTerm task exited with status %s\\n' \"$mterm_status\"\n";
+    stream << "exit \"$mterm_status\"\n";
+    stream << delimiter << "\n";
+    stream << "bash \"$mterm_task\"\n";
+
+    return injection;
 }
 
 static TerminalSession *sessionForTerminal(TerminalUiState *state, QTermWidget *terminal)
@@ -424,6 +605,8 @@ static void stopTerminalProcess(QTermWidget *terminal)
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
+    statusBar()->showMessage(QStringLiteral("Ready"));
+
     auto *state = new TerminalUiState;
     qApp->installEventFilter(new TerminalFocusFilter(state, this));
     connect(qApp, &QCoreApplication::aboutToQuit, this, [state]() {
@@ -831,15 +1014,20 @@ MainWindow::MainWindow(QWidget *parent)
     };
 
     auto *fileMenu = menuBar()->addMenu(QStringLiteral("File"));
-    fileMenu->addAction(QStringLiteral("Exit"), this, &QWidget::close);
+    fileMenu->menuAction()->setStatusTip(QStringLiteral("Application actions"));
+    auto *exitAction = fileMenu->addAction(QStringLiteral("Exit"), this, &QWidget::close);
+    exitAction->setStatusTip(QStringLiteral("Close mTerm"));
 
     auto *viewMenu = menuBar()->addMenu(QStringLiteral("View"));
+    viewMenu->menuAction()->setStatusTip(QStringLiteral("Change terminal layout"));
     auto *tabsViewAction = viewMenu->addAction(QStringLiteral("Tabs"));
     tabsViewAction->setCheckable(true);
     tabsViewAction->setChecked(false);
+    tabsViewAction->setStatusTip(QStringLiteral("Show one terminal per tab"));
     auto *tileViewAction = viewMenu->addAction(QStringLiteral("Tile All"));
     tileViewAction->setCheckable(true);
     tileViewAction->setChecked(true);
+    tileViewAction->setStatusTip(QStringLiteral("Show all terminals in a tiled layout"));
 
     connect(tabsViewAction, &QAction::triggered, this, [state, tabsViewAction, tileViewAction]() {
         state->viewMode = ViewMode::Tabs;
@@ -860,11 +1048,13 @@ MainWindow::MainWindow(QWidget *parent)
     };
 
     auto *hostsMenu = menuBar()->addMenu(QStringLiteral("Hosts"));
+    hostsMenu->menuAction()->setStatusTip(QStringLiteral("Open local and SSH terminal sessions"));
 
     auto addHostAction = [this, openHost](QMenu *menu, const QString &host) {
-        menu->addAction(host, this, [host, openHost]() {
+        auto *action = menu->addAction(host, this, [host, openHost]() {
             openHost(host);
         });
+        action->setStatusTip(QStringLiteral("Open terminal for %1").arg(host));
     };
 
     auto menuPathKey = [](const QStringList &parts) {
@@ -875,9 +1065,10 @@ MainWindow::MainWindow(QWidget *parent)
         hostsMenu->clear();
 
         const QList<SshHostEntry> hosts = readSshConfigHosts();
-        hostsMenu->addAction(QStringLiteral("localhost"), this, [createTerminal]() {
+        auto *localhostAction = hostsMenu->addAction(QStringLiteral("localhost"), this, [createTerminal]() {
             createTerminal(QStringLiteral("localhost"));
         });
+        localhostAction->setStatusTip(QStringLiteral("Open a local terminal"));
 
         if (!hosts.isEmpty()) {
             hostsMenu->addSeparator();
@@ -955,14 +1146,16 @@ MainWindow::MainWindow(QWidget *parent)
 
             const QString key = menuPathKey(path);
             auto *menu = parentMenu->addMenu(path.last());
+            menu->menuAction()->setStatusTip(QStringLiteral("Open hosts in %1").arg(path.join(QStringLiteral(" / "))));
 
             QStringList openAllHosts = hostsByPath.value(key).values();
             openAllHosts.sort(Qt::CaseInsensitive);
-            menu->addAction(QStringLiteral("Open All"), this, [openAllHosts, openHost]() {
+            auto *openAllAction = menu->addAction(QStringLiteral("Open All"), this, [openAllHosts, openHost]() {
                 for (const QString &host : openAllHosts) {
                     openHost(host);
                 }
             });
+            openAllAction->setStatusTip(QStringLiteral("Open all hosts in %1").arg(path.join(QStringLiteral(" / "))));
             menu->addSeparator();
 
             QStringList directHosts = directHostsByPath.value(key).values();
@@ -988,6 +1181,61 @@ MainWindow::MainWindow(QWidget *parent)
     };
 
     rebuildHostsMenu();
+
+    auto *tasksMenu = menuBar()->addMenu(QStringLiteral("Tasks"));
+    tasksMenu->menuAction()->setStatusTip(QStringLiteral("Run mterm tasks from ~/vault33"));
+    const QList<TaskFileEntry> taskFiles = readVaultTaskFiles();
+    if (taskFiles.isEmpty()) {
+        auto *emptyTasksAction = tasksMenu->addAction(QStringLiteral("No mterm tasks found"));
+        emptyTasksAction->setEnabled(false);
+        emptyTasksAction->setStatusTip(QStringLiteral("No markdown files tagged with mterm were found in ~/vault33"));
+    } else {
+        for (const TaskFileEntry &taskFile : taskFiles) {
+            QAction *taskAction = tasksMenu->addAction(taskFile.title);
+            taskAction->setToolTip(taskFile.path);
+            taskAction->setStatusTip(QStringLiteral("Run commands from %1").arg(taskFile.path));
+            connect(taskAction, &QAction::triggered, this, [this, state, currentSession, taskFile]() {
+                const QStringList commandBlocks = readMarkdownCommandBlocks(taskFile.path);
+                if (commandBlocks.isEmpty()) {
+                    QMessageBox::warning(
+                        this,
+                        QStringLiteral("Task has no commands"),
+                        QStringLiteral("No commands between ``` blocks were found in:\n%1").arg(taskFile.path));
+                    return;
+                }
+
+                TerminalSession *activeSession = currentSession();
+                if (!activeSession) {
+                    QMessageBox::warning(
+                        this,
+                        QStringLiteral("No active terminal"),
+                        QStringLiteral("Open or focus a terminal before running a task."));
+                    return;
+                }
+
+                QList<TerminalSession *> targetSessions{activeSession};
+                QList<TerminalSession *> checkedSessions;
+                for (TerminalSession *session : state->sessions) {
+                    if (session->broadcastEnabled) {
+                        checkedSessions.append(session);
+                    }
+                }
+
+                if (checkedSessions.count() > 1) {
+                    for (TerminalSession *session : checkedSessions) {
+                        if (!targetSessions.contains(session)) {
+                            targetSessions.append(session);
+                        }
+                    }
+                }
+
+                const QString commands = taskInjectionText(commandBlocks);
+                for (TerminalSession *session : targetSessions) {
+                    session->terminal->sendText(commands);
+                }
+            });
+        }
+    }
 
     const QString sshConfigPath = QDir::home().filePath(QStringLiteral(".ssh/config"));
     const QString sshDirectoryPath = QDir::home().filePath(QStringLiteral(".ssh"));
@@ -1020,7 +1268,8 @@ MainWindow::MainWindow(QWidget *parent)
     ensureSshConfigWatchPaths();
 
     auto *helpMenu = menuBar()->addMenu(QStringLiteral("Help"));
-    helpMenu->addAction(QStringLiteral("About"), this, [this]() {
+    helpMenu->menuAction()->setStatusTip(QStringLiteral("Help and application information"));
+    auto *aboutAction = helpMenu->addAction(QStringLiteral("About"), this, [this]() {
         QMessageBox::about(
             this,
             QStringLiteral("About mTerm"),
@@ -1029,8 +1278,9 @@ MainWindow::MainWindow(QWidget *parent)
                            "<p>A Qt/QTermWidget terminal broadcaster for running the same commands across multiple terminal sessions, including SSH connections.</p>")
                 .arg(QStringLiteral(MTERM_VERSION)));
     });
+    aboutAction->setStatusTip(QStringLiteral("Show mTerm version and application information"));
 
-    helpMenu->addAction(QStringLiteral("Adding Hosts"), this, [this]() {
+    auto *addingHostsAction = helpMenu->addAction(QStringLiteral("Adding Hosts"), this, [this]() {
         QMessageBox::information(
             this,
             QStringLiteral("Adding Hosts"),
@@ -1050,8 +1300,9 @@ MainWindow::MainWindow(QWidget *parent)
                 "Groups are used to build nested submenus under Hosts.\n"
                 "Wildcard entries (like 'Host *') are ignored."));
     });
+    addingHostsAction->setStatusTip(QStringLiteral("Show how to add SSH hosts to the Hosts menu"));
 
-    helpMenu->addAction(QStringLiteral("Shortcuts"), this, [this]() {
+    auto *shortcutsAction = helpMenu->addAction(QStringLiteral("Shortcuts"), this, [this]() {
         QMessageBox::information(
             this,
             QStringLiteral("Shortcuts"),
@@ -1063,6 +1314,7 @@ MainWindow::MainWindow(QWidget *parent)
                 "Click terminal checkbox: toggle broadcast for that terminal\n"
                 "Ctrl+Click terminal checkbox: set all checkboxes to the same state"));
     });
+    shortcutsAction->setStatusTip(QStringLiteral("Show keyboard and mouse shortcuts"));
 
     updateEmptyState();
 
