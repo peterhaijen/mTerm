@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QEvent>
 #include <QFile>
+#include <QFileSystemWatcher>
 #include <QFont>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -25,6 +26,7 @@
 #include <QTabWidget>
 #include <QTextStream>
 #include <QThread>
+#include <QTimer>
 #include <QToolButton>
 #include <QVector>
 #include <QVBoxLayout>
@@ -853,20 +855,11 @@ MainWindow::MainWindow(QWidget *parent)
         state->renderCurrentView();
     });
 
-    auto *hostsMenu = menuBar()->addMenu(QStringLiteral("Hosts"));
-    const QList<SshHostEntry> hosts = readSshConfigHosts();
-
     auto openHost = [createTerminal](const QString &host) {
         createTerminal(host, QStringLiteral("/bin/bash"), QStringList{QStringLiteral("-lc"), sshLauncherScript(host)});
     };
 
-    hostsMenu->addAction(QStringLiteral("localhost"), this, [createTerminal]() {
-        createTerminal(QStringLiteral("localhost"));
-    });
-
-    if (!hosts.isEmpty()) {
-        hostsMenu->addSeparator();
-    }
+    auto *hostsMenu = menuBar()->addMenu(QStringLiteral("Hosts"));
 
     auto addHostAction = [this, openHost](QMenu *menu, const QString &host) {
         menu->addAction(host, this, [host, openHost]() {
@@ -878,108 +871,153 @@ MainWindow::MainWindow(QWidget *parent)
         return parts.join(QChar(0x1f));
     };
 
-    const QString rootPathKey;
-    QMap<QString, QSet<QString>> hostsByPath;
-    QMap<QString, QSet<QString>> directHostsByPath;
-    QMap<QString, QSet<QString>> childGroupsByPath;
+    auto rebuildHostsMenu = [this, hostsMenu, createTerminal, openHost, addHostAction, menuPathKey]() {
+        hostsMenu->clear();
 
-    for (const SshHostEntry &entry : hosts) {
-        if (entry.groups.isEmpty()) {
-            addHostAction(hostsMenu, entry.host);
-            continue;
+        const QList<SshHostEntry> hosts = readSshConfigHosts();
+        hostsMenu->addAction(QStringLiteral("localhost"), this, [createTerminal]() {
+            createTerminal(QStringLiteral("localhost"));
+        });
+
+        if (!hosts.isEmpty()) {
+            hostsMenu->addSeparator();
         }
 
-        QStringList uniqueGroups;
-        QSet<QString> seenGroups;
-        for (const QString &group : entry.groups) {
-            if (group.isEmpty() || seenGroups.contains(group)) {
+        const QString rootPathKey;
+        QMap<QString, QSet<QString>> hostsByPath;
+        QMap<QString, QSet<QString>> directHostsByPath;
+        QMap<QString, QSet<QString>> childGroupsByPath;
+
+        for (const SshHostEntry &entry : hosts) {
+            if (entry.groups.isEmpty()) {
+                addHostAction(hostsMenu, entry.host);
                 continue;
             }
-            seenGroups.insert(group);
-            uniqueGroups.append(group);
-        }
 
-        if (uniqueGroups.isEmpty()) {
-            addHostAction(hostsMenu, entry.host);
-            continue;
-        }
-
-        QVector<bool> used(uniqueGroups.size(), false);
-        QStringList permutation;
-
-        std::function<void()> collectPermutations = [&]() {
-            if (permutation.size() == uniqueGroups.size()) {
-                for (int depth = 1; depth <= permutation.size(); ++depth) {
-                    const QStringList path = permutation.mid(0, depth);
-                    const QString key = menuPathKey(path);
-                    const QString parentKey = depth == 1
-                                                  ? rootPathKey
-                                                  : menuPathKey(permutation.mid(0, depth - 1));
-
-                    hostsByPath[key].insert(entry.host);
-                    childGroupsByPath[parentKey].insert(path.last());
-                    if (depth == permutation.size()) {
-                        directHostsByPath[key].insert(entry.host);
-                    }
+            QStringList uniqueGroups;
+            QSet<QString> seenGroups;
+            for (const QString &group : entry.groups) {
+                if (group.isEmpty() || seenGroups.contains(group)) {
+                    continue;
                 }
+                seenGroups.insert(group);
+                uniqueGroups.append(group);
+            }
+
+            if (uniqueGroups.isEmpty()) {
+                addHostAction(hostsMenu, entry.host);
+                continue;
+            }
+
+            QVector<bool> used(uniqueGroups.size(), false);
+            QStringList permutation;
+
+            std::function<void()> collectPermutations = [&]() {
+                if (permutation.size() == uniqueGroups.size()) {
+                    for (int depth = 1; depth <= permutation.size(); ++depth) {
+                        const QStringList path = permutation.mid(0, depth);
+                        const QString key = menuPathKey(path);
+                        const QString parentKey = depth == 1
+                                                      ? rootPathKey
+                                                      : menuPathKey(permutation.mid(0, depth - 1));
+
+                        hostsByPath[key].insert(entry.host);
+                        childGroupsByPath[parentKey].insert(path.last());
+                        if (depth == permutation.size()) {
+                            directHostsByPath[key].insert(entry.host);
+                        }
+                    }
+                    return;
+                }
+
+                QSet<QString> levelSeen;
+                for (int index = 0; index < uniqueGroups.size(); ++index) {
+                    if (used[index] || levelSeen.contains(uniqueGroups.at(index))) {
+                        continue;
+                    }
+
+                    levelSeen.insert(uniqueGroups.at(index));
+                    used[index] = true;
+                    permutation.append(uniqueGroups.at(index));
+                    collectPermutations();
+                    permutation.removeLast();
+                    used[index] = false;
+                }
+            };
+
+            collectPermutations();
+        }
+
+        std::function<void(QMenu *, const QStringList &)> addGroupMenuTree = [&](QMenu *parentMenu, const QStringList &path) {
+            if (path.isEmpty()) {
                 return;
             }
 
-            QSet<QString> levelSeen;
-            for (int index = 0; index < uniqueGroups.size(); ++index) {
-                if (used[index] || levelSeen.contains(uniqueGroups.at(index))) {
-                    continue;
-                }
+            const QString key = menuPathKey(path);
+            auto *menu = parentMenu->addMenu(path.last());
 
-                levelSeen.insert(uniqueGroups.at(index));
-                used[index] = true;
-                permutation.append(uniqueGroups.at(index));
-                collectPermutations();
-                permutation.removeLast();
-                used[index] = false;
+            QStringList openAllHosts = hostsByPath.value(key).values();
+            openAllHosts.sort(Qt::CaseInsensitive);
+            menu->addAction(QStringLiteral("Open All"), this, [openAllHosts, openHost]() {
+                for (const QString &host : openAllHosts) {
+                    openHost(host);
+                }
+            });
+            menu->addSeparator();
+
+            QStringList directHosts = directHostsByPath.value(key).values();
+            directHosts.sort(Qt::CaseInsensitive);
+            for (const QString &host : directHosts) {
+                addHostAction(menu, host);
+            }
+
+            QStringList childGroups = childGroupsByPath.value(key).values();
+            childGroups.sort(Qt::CaseInsensitive);
+            for (const QString &childGroup : childGroups) {
+                QStringList childPath = path;
+                childPath.append(childGroup);
+                addGroupMenuTree(menu, childPath);
             }
         };
 
-        collectPermutations();
-    }
-
-    std::function<void(QMenu *, const QStringList &)> addGroupMenuTree = [&](QMenu *parentMenu, const QStringList &path) {
-        if (path.isEmpty()) {
-            return;
-        }
-
-        const QString key = menuPathKey(path);
-        auto *menu = parentMenu->addMenu(path.last());
-
-        QStringList openAllHosts = hostsByPath.value(key).values();
-        openAllHosts.sort(Qt::CaseInsensitive);
-        menu->addAction(QStringLiteral("Open All"), this, [openAllHosts, openHost]() {
-            for (const QString &host : openAllHosts) {
-                openHost(host);
-            }
-        });
-        menu->addSeparator();
-
-        QStringList directHosts = directHostsByPath.value(key).values();
-        directHosts.sort(Qt::CaseInsensitive);
-        for (const QString &host : directHosts) {
-            addHostAction(menu, host);
-        }
-
-        QStringList childGroups = childGroupsByPath.value(key).values();
-        childGroups.sort(Qt::CaseInsensitive);
-        for (const QString &childGroup : childGroups) {
-            QStringList childPath = path;
-            childPath.append(childGroup);
-            addGroupMenuTree(menu, childPath);
+        QStringList topLevelGroups = childGroupsByPath.value(rootPathKey).values();
+        topLevelGroups.sort(Qt::CaseInsensitive);
+        for (const QString &group : topLevelGroups) {
+            addGroupMenuTree(hostsMenu, QStringList{group});
         }
     };
 
-    QStringList topLevelGroups = childGroupsByPath.value(rootPathKey).values();
-    topLevelGroups.sort(Qt::CaseInsensitive);
-    for (const QString &group : topLevelGroups) {
-        addGroupMenuTree(hostsMenu, QStringList{group});
-    }
+    rebuildHostsMenu();
+
+    const QString sshConfigPath = QDir::home().filePath(QStringLiteral(".ssh/config"));
+    const QString sshDirectoryPath = QDir::home().filePath(QStringLiteral(".ssh"));
+    auto *sshConfigWatcher = new QFileSystemWatcher(this);
+    auto ensureSshConfigWatchPaths = [sshConfigWatcher, sshConfigPath, sshDirectoryPath]() {
+        const QStringList watchedFiles = sshConfigWatcher->files();
+        const QStringList watchedDirectories = sshConfigWatcher->directories();
+
+        if (QFile::exists(sshConfigPath) && !watchedFiles.contains(sshConfigPath)) {
+            sshConfigWatcher->addPath(sshConfigPath);
+        }
+
+        if (QDir(sshDirectoryPath).exists() && !watchedDirectories.contains(sshDirectoryPath)) {
+            sshConfigWatcher->addPath(sshDirectoryPath);
+        }
+    };
+    auto *sshConfigReloadTimer = new QTimer(this);
+    sshConfigReloadTimer->setSingleShot(true);
+    sshConfigReloadTimer->setInterval(100);
+
+    connect(sshConfigReloadTimer, &QTimer::timeout, this, [rebuildHostsMenu, ensureSshConfigWatchPaths]() {
+        ensureSshConfigWatchPaths();
+        rebuildHostsMenu();
+    });
+    const auto scheduleSshConfigReload = [sshConfigReloadTimer]() {
+        sshConfigReloadTimer->start();
+    };
+    connect(sshConfigWatcher, &QFileSystemWatcher::fileChanged, this, scheduleSshConfigReload);
+    connect(sshConfigWatcher, &QFileSystemWatcher::directoryChanged, this, scheduleSshConfigReload);
+    ensureSshConfigWatchPaths();
 
     auto *helpMenu = menuBar()->addMenu(QStringLiteral("Help"));
     helpMenu->addAction(QStringLiteral("About"), this, [this]() {
