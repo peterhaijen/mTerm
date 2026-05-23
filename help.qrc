@@ -1,0 +1,8 @@
+<RCC>
+    <qresource prefix="/help">
+        <file alias="01-about.html">help/01-about.html</file>
+        <file alias="02-adding-hosts.html">help/02-adding-hosts.html</file>
+        <file alias="03-adding-tasks.html">help/03-adding-tasks.html</file>
+        <file alias="04-shortcuts.html">help/04-shortcuts.html</file>
+    </qresource>
+</RCC>

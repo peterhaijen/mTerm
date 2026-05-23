@@ -21,6 +21,7 @@ set(PROJECT_SOURCES
         main.cpp
         mainwindow.cpp
         mainwindow.h
+        help.qrc
         ${CMAKE_CURRENT_BINARY_DIR}/generated/version.h
         ${TS_FILES}
 )

@@ -4,6 +4,8 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QCoreApplication>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QDirIterator>
 #include <QEvent>
@@ -11,6 +13,7 @@
 #include <QFileInfo>
 #include <QFileSystemWatcher>
 #include <QFont>
+#include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QKeyEvent>
@@ -20,7 +23,9 @@
 #include <QMap>
 #include <QMessageBox>
 #include <QMouseEvent>
+#include <QRect>
 #include <QRegularExpression>
+#include <QScreen>
 #include <QScrollArea>
 #include <QSet>
 #include <QShortcut>
@@ -151,6 +156,101 @@ struct TaskFileEntry
     QString title;
     QString path;
 };
+
+struct HelpPageEntry
+{
+    QString title;
+    QString path;
+    QString content;
+};
+
+class HelpDialog : public QDialog
+{
+public:
+    HelpDialog(QWidget *parent, const QString &title, const QString &content)
+        : QDialog(parent)
+    {
+        setWindowTitle(title);
+
+        auto *dialogLayout = new QVBoxLayout(this);
+        dialogLayout->setContentsMargins(16, 16, 16, 12);
+        dialogLayout->setSpacing(12);
+
+        auto *textLabel = new QLabel(content, this);
+        textLabel->setTextFormat(Qt::RichText);
+        textLabel->setWordWrap(true);
+        textLabel->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        textLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+
+        auto *scrollArea = new QScrollArea(this);
+        scrollArea->setWidget(textLabel);
+        scrollArea->setWidgetResizable(true);
+        scrollArea->setFrameShape(QFrame::NoFrame);
+        dialogLayout->addWidget(scrollArea);
+
+        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok, this);
+        connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+        dialogLayout->addWidget(buttons);
+
+        const QScreen *targetScreen = parent ? parent->screen() : screen();
+        const QRect availableGeometry = targetScreen ? targetScreen->availableGeometry() : QRect(0, 0, 1200, 800);
+        const int maxDialogWidth = std::max(360, static_cast<int>(availableGeometry.width() * 0.9));
+        const int minDialogWidth = std::min(700, maxDialogWidth);
+        const int dialogWidth = std::clamp(static_cast<int>(availableGeometry.width() * 0.55),
+                                           minDialogWidth,
+                                           std::min(1100, maxDialogWidth));
+        const int maxDialogHeight = static_cast<int>(availableGeometry.height() * 0.75);
+        textLabel->setMinimumWidth(dialogWidth - 64);
+        resize(dialogWidth, std::clamp(sizeHint().height(), std::min(260, maxDialogHeight), maxDialogHeight));
+    }
+};
+
+static QString readTextFile(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return {};
+    }
+
+    QTextStream stream(&file);
+    return stream.readAll();
+}
+
+static QString htmlTitle(const QString &content, const QString &fallback)
+{
+    static const QRegularExpression titleRegex(QStringLiteral("<title>([^<]+)</title>"),
+                                               QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch match = titleRegex.match(content);
+    if (match.hasMatch()) {
+        return match.captured(1).trimmed();
+    }
+
+    QString title = QFileInfo(fallback).completeBaseName();
+    title.remove(QRegularExpression(QStringLiteral("^\\d+-")));
+    title.replace(QLatin1Char('-'), QLatin1Char(' '));
+    if (!title.isEmpty()) {
+        title[0] = title[0].toUpper();
+    }
+    return title;
+}
+
+static QList<HelpPageEntry> readHelpPages()
+{
+    QDir helpDirectory(QStringLiteral(":/help"));
+    const QStringList files = helpDirectory.entryList(QStringList{QStringLiteral("*.html")}, QDir::Files, QDir::Name);
+
+    QList<HelpPageEntry> pages;
+    for (const QString &fileName : files) {
+        const QString path = helpDirectory.filePath(fileName);
+        QString content = readTextFile(path);
+        if (content.isEmpty()) {
+            continue;
+        }
+        content.replace(QStringLiteral("{{MTERM_VERSION}}"), QStringLiteral(MTERM_VERSION));
+        pages.append({htmlTitle(content, fileName), path, content});
+    }
+    return pages;
+}
 
 static bool isConcreteSshHost(const QString &host)
 {
@@ -1269,52 +1369,20 @@ MainWindow::MainWindow(QWidget *parent)
 
     auto *helpMenu = menuBar()->addMenu(QStringLiteral("Help"));
     helpMenu->menuAction()->setStatusTip(QStringLiteral("Help and application information"));
-    auto *aboutAction = helpMenu->addAction(QStringLiteral("About"), this, [this]() {
-        QMessageBox::about(
-            this,
-            QStringLiteral("About mTerm"),
-            QStringLiteral("<h3>mTerm</h3>"
-                           "<p>Version: %1</p>"
-                           "<p>A Qt/QTermWidget terminal broadcaster for running the same commands across multiple terminal sessions, including SSH connections.</p>")
-                .arg(QStringLiteral(MTERM_VERSION)));
-    });
-    aboutAction->setStatusTip(QStringLiteral("Show mTerm version and application information"));
-
-    auto *addingHostsAction = helpMenu->addAction(QStringLiteral("Adding Hosts"), this, [this]() {
-        QMessageBox::information(
-            this,
-            QStringLiteral("Adding Hosts"),
-            QStringLiteral(
-                "mTerm reads hosts from ~/.ssh/config.\n"
-                "\n"
-                "Only Host blocks marked with '# mTerm' are added to the Hosts menu.\n"
-                "\n"
-                "Example:\n"
-                "Host webserver\n"
-                "  # mTerm Groups Webserver\n"
-                "  Hostname 10.0.0.11\n"
-                "\n"
-                "To place a host in multiple groups, add a line like:\n"
-                "  # mTerm Groups VPS Webserver\n"
-                "\n"
-                "Groups are used to build nested submenus under Hosts.\n"
-                "Wildcard entries (like 'Host *') are ignored."));
-    });
-    addingHostsAction->setStatusTip(QStringLiteral("Show how to add SSH hosts to the Hosts menu"));
-
-    auto *shortcutsAction = helpMenu->addAction(QStringLiteral("Shortcuts"), this, [this]() {
-        QMessageBox::information(
-            this,
-            QStringLiteral("Shortcuts"),
-            QStringLiteral(
-                "Ctrl+Right: next tab (tabs view) or next terminal (tile view)\n"
-                "Ctrl+Left: previous tab (tabs view) or previous terminal (tile view)\n"
-                "Ctrl+Space: toggle broadcast checkbox for the current terminal\n"
-                "Ctrl+Delete: close current terminal\n"
-                "Click terminal checkbox: toggle broadcast for that terminal\n"
-                "Ctrl+Click terminal checkbox: set all checkboxes to the same state"));
-    });
-    shortcutsAction->setStatusTip(QStringLiteral("Show keyboard and mouse shortcuts"));
+    const QList<HelpPageEntry> helpPages = readHelpPages();
+    if (helpPages.isEmpty()) {
+        auto *emptyHelpAction = helpMenu->addAction(QStringLiteral("No help pages found"));
+        emptyHelpAction->setEnabled(false);
+        emptyHelpAction->setStatusTip(QStringLiteral("No help resources were found"));
+    } else {
+        for (const HelpPageEntry &helpPage : helpPages) {
+            QAction *helpAction = helpMenu->addAction(helpPage.title);
+            helpAction->setStatusTip(QStringLiteral("Show %1 help").arg(helpPage.title));
+            connect(helpAction, &QAction::triggered, this, [this, helpPage]() {
+                HelpDialog(this, helpPage.title, helpPage.content).exec();
+            });
+        }
+    }
 
     updateEmptyState();
 

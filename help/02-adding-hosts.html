@@ -1,0 +1,23 @@
+<html>
+<head>
+<title>Adding Hosts</title>
+</head>
+<body>
+<h3>Adding Hosts</h3>
+<p>mTerm reads hosts from <code>~/.ssh/config</code>.</p>
+<ul>
+<li>Only <code>Host</code> blocks marked with <code># mTerm</code> are added to the <b>Hosts</b> menu.</li>
+<li>Groups are used to build nested submenus under <b>Hosts</b>.</li>
+<li>Wildcard entries like <code>Host *</code> are ignored.</li>
+</ul>
+<p><b>Example</b></p>
+<pre style="background:#f4f4f4; padding:8px; border:1px solid #d0d0d0;">Host webserver
+  # mTerm Groups Webserver
+  Hostname 10.0.0.11
+
+# Multiple groups:
+Host appserver
+  # mTerm Groups VPS Webserver
+  Hostname 10.0.0.12</pre>
+</body>
+</html>
