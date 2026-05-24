@@ -91,7 +91,9 @@ protected:
         QCheckBox::mouseReleaseEvent(event);
         session->broadcastEnabled = isChecked();
 
-        if ((event->modifiers() & Qt::ControlModifier) && setAllChecked) {
+        if ((event->modifiers() & Qt::AltModifier)
+            && (event->modifiers() & Qt::ShiftModifier)
+            && setAllChecked) {
             setAllChecked(isChecked());
         }
 
@@ -1136,7 +1138,7 @@ MainWindow::MainWindow(QWidget *parent)
         }
     };
 
-    auto *nextTabShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Right), this);
+    auto *nextTabShortcut = new QShortcut(QKeySequence(Qt::ALT | Qt::SHIFT | Qt::Key_Right), this);
     connect(nextTabShortcut, &QShortcut::activated, this, [state, tabs, currentSession, focusSession]() {
         if (state->viewMode == ViewMode::Tabs && tabs->count() > 0) {
             tabs->setCurrentIndex((tabs->currentIndex() + 1) % tabs->count());
@@ -1150,7 +1152,7 @@ MainWindow::MainWindow(QWidget *parent)
         }
     });
 
-    auto *previousTabShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Left), this);
+    auto *previousTabShortcut = new QShortcut(QKeySequence(Qt::ALT | Qt::SHIFT | Qt::Key_Left), this);
     connect(previousTabShortcut, &QShortcut::activated, this, [state, tabs, currentSession, focusSession]() {
         if (state->viewMode == ViewMode::Tabs && tabs->count() > 0) {
             tabs->setCurrentIndex((tabs->currentIndex() - 1 + tabs->count()) % tabs->count());
@@ -1164,7 +1166,7 @@ MainWindow::MainWindow(QWidget *parent)
         }
     });
 
-    auto *toggleCurrentBroadcastShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Space), this);
+    auto *toggleCurrentBroadcastShortcut = new QShortcut(QKeySequence(Qt::ALT | Qt::SHIFT | Qt::Key_Space), this);
     connect(toggleCurrentBroadcastShortcut, &QShortcut::activated, this, [currentSession, state]() {
         TerminalSession *session = currentSession();
         if (session) {
@@ -1173,7 +1175,7 @@ MainWindow::MainWindow(QWidget *parent)
         }
     });
 
-    auto *closeCurrentTabShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Delete), this);
+    auto *closeCurrentTabShortcut = new QShortcut(QKeySequence(Qt::ALT | Qt::SHIFT | Qt::Key_Delete), this);
     connect(closeCurrentTabShortcut, &QShortcut::activated, this, [currentSession, state]() {
         if (state->closeSession) {
             state->closeSession(currentSession());

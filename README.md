@@ -10,7 +10,7 @@ Open a set of hosts, select the terminals that should receive input, and type on
 
 - Broadcast typed input from one terminal to all checked terminals.
 - Per-terminal broadcast checkbox.
-- `Ctrl` + click on a checkbox sets all checkboxes to the same state.
+- `Alt` + `Shift` + click on a checkbox sets all checkboxes to the same state.
 - Open a local terminal from `Hosts -> localhost`.
 - Read marked SSH hosts from `~/.ssh/config` and add them to the `Hosts` menu.
 - Mark a host for mTerm with a `# mTerm` comment.
@@ -33,10 +33,10 @@ This creates both `Hosts -> VPS -> otherHost` and `Hosts -> Webserver -> otherHo
 
 ## Shortcuts
 
-- `Ctrl+Right`: next tab in tab view, next terminal in tiled view.
-- `Ctrl+Left`: previous tab in tab view, previous terminal in tiled view.
-- `Ctrl+Space`: toggle broadcast checkbox for the current terminal.
-- `Ctrl+Delete`: close current terminal.
+- `Alt+Shift+Right`: next tab in tab view, next terminal in tiled view.
+- `Alt+Shift+Left`: previous tab in tab view, previous terminal in tiled view.
+- `Alt+Shift+Space`: toggle broadcast checkbox for the current terminal.
+- `Alt+Shift+Delete`: close current terminal.
 
 The same list is available in the app via `Help -> Shortcuts`.
 
