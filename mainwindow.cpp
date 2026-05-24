@@ -454,17 +454,23 @@ static QStringList readMarkdownCommandBlocks(const QString &path)
     QStringList commandBlocks;
     QStringList currentBlock;
     bool inCodeBlock = false;
+    bool currentBlockIsBash = false;
 
     QTextStream stream(&file);
     while (!stream.atEnd()) {
         const QString line = stream.readLine();
-        if (line.trimmed().startsWith(QStringLiteral("```"))) {
+        const QString trimmed = line.trimmed();
+        if (trimmed.startsWith(QStringLiteral("```"))) {
             if (inCodeBlock) {
-                commandBlocks.append(currentBlock.join(QLatin1Char('\n')));
+                if (currentBlockIsBash) {
+                    commandBlocks.append(currentBlock.join(QLatin1Char('\n')));
+                }
                 currentBlock.clear();
                 inCodeBlock = false;
+                currentBlockIsBash = false;
             } else {
                 inCodeBlock = true;
+                currentBlockIsBash = trimmed.compare(QStringLiteral("```bash"), Qt::CaseInsensitive) == 0;
             }
             continue;
         }
@@ -1300,7 +1306,7 @@ MainWindow::MainWindow(QWidget *parent)
                     QMessageBox::warning(
                         this,
                         QStringLiteral("Task has no commands"),
-                        QStringLiteral("No commands between ``` blocks were found in:\n%1").arg(taskFile.path));
+                        QStringLiteral("No commands between ```bash and ``` blocks were found in:\n%1").arg(taskFile.path));
                     return;
                 }
 
