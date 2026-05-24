@@ -67,6 +67,7 @@ struct TerminalSession
     bool hasFocus = false;
     bool isPrompt = false;
     bool persistentProcess = false;
+    int broadcastFlashToken = 0;
 };
 
 enum class ViewMode { Tabs, Tile };
@@ -149,6 +150,17 @@ static void saveAiBinaryPath(const QString &aiBinaryPath)
 {
     QSettings().setValue(aiBinaryPathKey, aiBinaryPath);
 }
+}
+
+static QString terminalHeaderStyle(TerminalSession *session)
+{
+    if (session->broadcastFlashToken > 0) {
+        return QStringLiteral("background-color: #5b5532; color: white; padding: 3px;");
+    }
+
+    return session->hasFocus
+        ? QStringLiteral("background-color: #2f6fed; color: white; padding: 3px;")
+        : QStringLiteral("background-color: #3a3a3a; color: white; padding: 3px;");
 }
 
 class BroadcastCheckBox : public QCheckBox
@@ -1186,10 +1198,25 @@ MainWindow::MainWindow(QWidget *parent)
         for (auto it = tileHeaders->begin(); it != tileHeaders->end(); ++it) {
             TerminalSession *session = it.key();
             QWidget *header = it.value();
-            header->setStyleSheet(session->hasFocus
-                                      ? QStringLiteral("background-color: #2f6fed; color: white; padding: 3px;")
-                                      : QStringLiteral("background-color: #3a3a3a; color: white; padding: 3px;"));
+            header->setStyleSheet(terminalHeaderStyle(session));
         }
+    };
+
+    auto flashBroadcastHeader = [this, state, updateTileHeaderStyles](TerminalSession *session) {
+        if (!session || !state->sessions.contains(session)) {
+            return;
+        }
+
+        const int flashToken = ++session->broadcastFlashToken;
+        updateTileHeaderStyles();
+        QTimer::singleShot(180, this, [state, session, flashToken, updateTileHeaderStyles]() {
+            if (!state->sessions.contains(session) || session->broadcastFlashToken != flashToken) {
+                return;
+            }
+
+            session->broadcastFlashToken = 0;
+            updateTileHeaderStyles();
+        });
     };
 
     state->setActiveSession = [state, updateTileHeaderStyles](TerminalSession *activeSession) {
@@ -1275,6 +1302,8 @@ MainWindow::MainWindow(QWidget *parent)
                 tabHeaderLayout->setSpacing(4);
                 tabHeaderLayout->addWidget(checkBox);
                 tabHeaderLayout->addWidget(closeButton);
+                tabHeader->setStyleSheet(terminalHeaderStyle(session));
+                tileHeaders->insert(session, tabHeader);
                 closeButton->setText(QStringLiteral("x"));
                 closeButton->setAutoRaise(true);
                 closeButton->setToolTip(QStringLiteral("Close terminal"));
@@ -1307,9 +1336,7 @@ MainWindow::MainWindow(QWidget *parent)
                 auto *title = new QLabel(session->title, header);
                 auto *closeButton = new QToolButton(header);
 
-                header->setStyleSheet(session->hasFocus
-                                          ? QStringLiteral("background-color: #2f6fed; color: white; padding: 3px;")
-                                          : QStringLiteral("background-color: #3a3a3a; color: white; padding: 3px;"));
+                header->setStyleSheet(terminalHeaderStyle(session));
                 tileHeaders->insert(session, header);
                 tileTitles->insert(session, title);
 
@@ -1497,7 +1524,7 @@ MainWindow::MainWindow(QWidget *parent)
     auto *terminalShortcutFilter = new TerminalShortcutFilter(state, terminalFont, focusSession, showStatusMessage, this);
     QApplication::instance()->installEventFilter(terminalShortcutFilter);
 
-    auto createTerminal = [this, state, terminalFont, updateSessionTitle, terminalShortcutFilter, focusSession](
+    auto createTerminal = [this, state, terminalFont, updateSessionTitle, terminalShortcutFilter, focusSession, flashBroadcastHeader](
                               const QString &tabName = QStringLiteral("Terminal"),
                               const QString &program = QString(),
                               const QStringList &args = QStringList(),
@@ -1546,7 +1573,7 @@ MainWindow::MainWindow(QWidget *parent)
             }
         });
 
-        connect(terminal, &QTermWidget::termKeyPressed, this, [state, session](QKeyEvent *event) {
+        connect(terminal, &QTermWidget::termKeyPressed, this, [state, session, flashBroadcastHeader](QKeyEvent *event) {
             static bool broadcasting = false;
             if (broadcasting || !session->broadcastEnabled) {
                 return;
@@ -1565,6 +1592,7 @@ MainWindow::MainWindow(QWidget *parent)
                                          event->isAutoRepeat(),
                                          event->count());
                 targetSession->terminal->sendKeyEvent(&forwardedEvent);
+                flashBroadcastHeader(targetSession);
             }
             broadcasting = false;
         });
