@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
+#include <QColor>
 #include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -18,6 +19,7 @@
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -27,6 +29,7 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QProcess>
+#include <QPixmap>
 #include <QRect>
 #include <QRegularExpression>
 #include <QScreen>
@@ -161,6 +164,13 @@ static QString terminalHeaderStyle(TerminalSession *session)
     return session->hasFocus
         ? QStringLiteral("background-color: #2f6fed; color: white; padding: 3px;")
         : QStringLiteral("background-color: #3a3a3a; color: white; padding: 3px;");
+}
+
+static QIcon tabBroadcastIcon(bool flashing)
+{
+    QPixmap pixmap(8, 8);
+    pixmap.fill(flashing ? QColor(QStringLiteral("#2f6fed")) : Qt::transparent);
+    return QIcon(pixmap);
 }
 
 class BroadcastCheckBox : public QCheckBox
@@ -1166,6 +1176,12 @@ MainWindow::MainWindow(QWidget *parent)
     auto *tileHeaders = new QMap<TerminalSession *, QWidget *>;
     auto *tileTitles = new QMap<TerminalSession *, QLabel *>;
 
+    tabs->tabBar()->setExpanding(false);
+    tabs->tabBar()->setElideMode(Qt::ElideNone);
+    tabs->tabBar()->setStyleSheet(QStringLiteral(
+        "QTabBar::tab { padding: 2px 4px; margin: 0px; }"
+        "QTabBar::tab:selected { background-color: #2f6fed; color: white; }"));
+
     emptyLabel->setAlignment(Qt::AlignCenter);
     emptyLabel->setWordWrap(true);
     tileScroll->setWidget(tileContent);
@@ -1194,11 +1210,19 @@ MainWindow::MainWindow(QWidget *parent)
         emptyLabel->setVisible(!hasSessions);
     };
 
-    auto updateTileHeaderStyles = [tileHeaders]() {
+    tabs->tabBar()->setIconSize(QSize(8, 8));
+
+    auto updateTileHeaderStyles = [state, tabs, tileHeaders]() {
         for (auto it = tileHeaders->begin(); it != tileHeaders->end(); ++it) {
             TerminalSession *session = it.key();
             QWidget *header = it.value();
             header->setStyleSheet(terminalHeaderStyle(session));
+        }
+
+        for (int index = 0; index < tabs->count(); ++index) {
+            if (TerminalSession *session = sessionForTerminal(state, qobject_cast<QTermWidget *>(tabs->widget(index)))) {
+                tabs->setTabIcon(index, tabBroadcastIcon(session->broadcastFlashToken > 0));
+            }
         }
     };
 
@@ -1237,10 +1261,15 @@ MainWindow::MainWindow(QWidget *parent)
     auto clearTabs = [tabs]() {
         while (tabs->count() > 0) {
             QWidget *widget = tabs->widget(0);
-            QWidget *button = tabs->tabBar()->tabButton(0, QTabBar::LeftSide);
+            QWidget *leftButton = tabs->tabBar()->tabButton(0, QTabBar::LeftSide);
+            QWidget *rightButton = tabs->tabBar()->tabButton(0, QTabBar::RightSide);
             tabs->tabBar()->setTabButton(0, QTabBar::LeftSide, nullptr);
-            if (button) {
-                button->deleteLater();
+            tabs->tabBar()->setTabButton(0, QTabBar::RightSide, nullptr);
+            if (leftButton) {
+                leftButton->deleteLater();
+            }
+            if (rightButton) {
+                rightButton->deleteLater();
             }
             tabs->removeTab(0);
             if (widget) {
@@ -1285,29 +1314,29 @@ MainWindow::MainWindow(QWidget *parent)
     };
 
     state->renderCurrentView = [state, tabs, tileContent, tileLayout, tileHeaders, tileTitles, clearTabs, clearTile, updateEmptyState, setAllBroadcast, focusSession]() {
+        const bool tabsUpdatesEnabled = tabs->updatesEnabled();
+        const bool tabBarUpdatesEnabled = tabs->tabBar()->updatesEnabled();
+        tabs->setUpdatesEnabled(false);
+        tabs->tabBar()->setUpdatesEnabled(false);
+        tabs->tabBar()->setVisible(false);
+
         clearTabs();
         clearTile();
 
         if (state->viewMode == ViewMode::Tabs) {
             for (TerminalSession *session : state->sessions) {
-                const int tabIndex = tabs->addTab(session->terminal, session->title);
+                const int tabIndex = tabs->addTab(session->terminal, tabBroadcastIcon(false), session->title);
                 session->terminal->setMinimumSize(0, 0);
                 session->terminal->show();
-                auto *tabHeader = new QWidget(tabs);
-                auto *tabHeaderLayout = new QHBoxLayout(tabHeader);
                 auto *checkBox = new BroadcastCheckBox(session, tabs);
                 auto *closeButton = new QToolButton(tabs);
 
-                tabHeaderLayout->setContentsMargins(0, 0, 0, 0);
-                tabHeaderLayout->setSpacing(4);
-                tabHeaderLayout->addWidget(checkBox);
-                tabHeaderLayout->addWidget(closeButton);
-                tabHeader->setStyleSheet(terminalHeaderStyle(session));
-                tileHeaders->insert(session, tabHeader);
                 closeButton->setText(QStringLiteral("x"));
                 closeButton->setAutoRaise(true);
                 closeButton->setToolTip(QStringLiteral("Close terminal"));
                 closeButton->setFixedSize(16, 16);
+                closeButton->setStyleSheet(QStringLiteral("QToolButton { color: palette(window-text); border: none; background: transparent; padding: 0px; }"));
+                tabs->setTabToolTip(tabIndex, session->title);
 
                 checkBox->setAllChecked = [state, setAllBroadcast](bool checked) {
                     setAllBroadcast(checked);
@@ -1322,7 +1351,8 @@ MainWindow::MainWindow(QWidget *parent)
                     }
                 });
 
-                tabs->tabBar()->setTabButton(tabIndex, QTabBar::LeftSide, tabHeader);
+                tabs->tabBar()->setTabButton(tabIndex, QTabBar::LeftSide, checkBox);
+                tabs->tabBar()->setTabButton(tabIndex, QTabBar::RightSide, closeButton);
             }
         } else {
             const int columns = tileColumns(state->sessions.count());
@@ -1378,6 +1408,11 @@ MainWindow::MainWindow(QWidget *parent)
         }
 
         updateEmptyState();
+        tabs->tabBar()->updateGeometry();
+        tabs->tabBar()->setVisible(state->viewMode == ViewMode::Tabs && !state->sessions.isEmpty());
+        tabs->tabBar()->setUpdatesEnabled(tabBarUpdatesEnabled);
+        tabs->setUpdatesEnabled(tabsUpdatesEnabled);
+        tabs->update();
     };
 
     state->closeSession = [state](TerminalSession *session) {
@@ -1445,7 +1480,11 @@ MainWindow::MainWindow(QWidget *parent)
 
         const int tabIndex = tabs->indexOf(session->terminal);
         if (tabIndex != -1) {
-            tabs->setTabText(tabIndex, title);
+            const QString currentTabTitle = tabs->tabText(tabIndex);
+            if (title.contains(QLatin1Char('@')) && !currentTabTitle.contains(QLatin1Char('@'))) {
+                tabs->setTabText(tabIndex, title);
+            }
+            tabs->setTabToolTip(tabIndex, title);
         }
 
         if (auto *tileTitle = tileTitles->value(session, nullptr)) {
