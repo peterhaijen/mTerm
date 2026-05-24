@@ -148,6 +148,79 @@ private:
     TerminalUiState *state = nullptr;
 };
 
+class TerminalShortcutFilter : public QObject
+{
+public:
+    explicit TerminalShortcutFilter(const QFont &defaultTerminalFont, QObject *parent = nullptr)
+        : QObject(parent)
+        , defaultTerminalFont(defaultTerminalFont)
+    {
+    }
+
+protected:
+    bool eventFilter(QObject *object, QEvent *event) override
+    {
+        if (event->type() != QEvent::KeyPress) {
+            return QObject::eventFilter(object, event);
+        }
+
+        QTermWidget *terminal = nullptr;
+        QObject *currentObject = object;
+        while (currentObject && !terminal) {
+            terminal = qobject_cast<QTermWidget *>(currentObject);
+            currentObject = currentObject->parent();
+        }
+
+        auto *keyEvent = static_cast<QKeyEvent *>(event);
+        if (!terminal || !keyEvent) {
+            return QObject::eventFilter(object, event);
+        }
+
+        const Qt::KeyboardModifiers modifiers = keyEvent->modifiers();
+        const int key = keyEvent->key();
+        const bool ctrl = modifiers.testFlag(Qt::ControlModifier);
+        const bool shift = modifiers.testFlag(Qt::ShiftModifier);
+        const bool alt = modifiers.testFlag(Qt::AltModifier);
+        const bool meta = modifiers.testFlag(Qt::MetaModifier);
+
+        if (ctrl && !shift && !alt && !meta && key == Qt::Key_Insert) {
+            terminal->copyClipboard();
+            keyEvent->accept();
+            return true;
+        }
+
+        if (shift && !ctrl && !alt && !meta && key == Qt::Key_Insert) {
+            terminal->pasteClipboard();
+            keyEvent->accept();
+            return true;
+        }
+
+        if (ctrl && shift && !alt && !meta && (key == Qt::Key_Plus || key == Qt::Key_Equal)) {
+            terminal->zoomIn();
+            keyEvent->accept();
+            return true;
+        }
+
+        if (ctrl && !shift && !alt && !meta && key == Qt::Key_Minus) {
+            terminal->zoomOut();
+            keyEvent->accept();
+            return true;
+        }
+
+        if (ctrl && !shift && !alt && !meta && key == Qt::Key_0) {
+            QFont font = defaultTerminalFont;
+            terminal->setTerminalFont(font);
+            keyEvent->accept();
+            return true;
+        }
+
+        return QObject::eventFilter(object, event);
+    }
+
+private:
+    QFont defaultTerminalFont;
+};
+
 struct SshHostEntry
 {
     QString host;
@@ -1185,10 +1258,13 @@ MainWindow::MainWindow(QWidget *parent)
     QFont terminalFont = QApplication::font();
     terminalFont.setFamily(QStringLiteral("Monospace"));
     terminalFont.setPointSize(10);
+    auto *terminalShortcutFilter = new TerminalShortcutFilter(terminalFont, this);
+    QApplication::instance()->installEventFilter(terminalShortcutFilter);
 
-    auto createTerminal = [this, state, terminalFont, updateSessionTitle](const QString &tabName = QStringLiteral("Terminal"),
-                                                                                       const QString &program = QString(),
-                                                                                       const QStringList &args = QStringList()) {
+    auto createTerminal = [this, state, terminalFont, updateSessionTitle, terminalShortcutFilter](
+                              const QString &tabName = QStringLiteral("Terminal"),
+                              const QString &program = QString(),
+                              const QStringList &args = QStringList()) {
         const bool useCustomProgram = !program.isEmpty();
         auto *terminal = new QTermWidget(useCustomProgram ? 0 : 1, this);
         auto *session = new TerminalSession{terminal, tabName, true, true};
@@ -1202,6 +1278,7 @@ MainWindow::MainWindow(QWidget *parent)
         terminal->setColorScheme(QStringLiteral("WhiteOnBlack"));
         terminal->setScrollBarPosition(QTermWidget::ScrollBarRight);
         terminal->setAutoClose(true);
+        terminal->installEventFilter(terminalShortcutFilter);
 
         connect(terminal, &QTermWidget::finished, this, [session, state]() {
             if (state->closeSession) {

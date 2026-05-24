@@ -37,6 +37,11 @@ This creates both `Hosts -> VPS -> otherHost` and `Hosts -> Webserver -> otherHo
 - `Alt+Shift+Left`: previous tab in tab view, previous terminal in tiled view.
 - `Alt+Shift+Space`: toggle broadcast checkbox for the current terminal.
 - `Alt+Shift+Delete`: close current terminal.
+- `Ctrl+Insert`: copy selected terminal text.
+- `Shift+Insert`: paste clipboard text into the current terminal.
+- `Ctrl+Shift++`: increase terminal font size.
+- `Ctrl+-`: decrease terminal font size.
+- `Ctrl+0`: reset terminal font size.
 
 The same list is available in the app via `Help -> Shortcuts`.
 
