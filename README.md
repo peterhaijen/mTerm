@@ -31,6 +31,9 @@ This creates both `Hosts -> VPS -> otherHost` and `Hosts -> Webserver -> otherHo
 - When enabled, SSH host tabs attach to a remote `screen` session named `mterm` if `screen` is installed on the remote host; otherwise they fall back to the remote login shell.
 - If the `mterm` screen session is already attached, new terminals use a normal shell instead of attaching a second time.
 - Choose the folder scanned for markdown task files with `Tasks -> Select Tasks Directory...`.
+- Choose an AI command binary with `AI -> Select AI Binary...` and start it with `AI -> Start AI`.
+- AI terminals never send or receive broadcast input.
+- mTerm allows only one AI terminal; starting AI again focuses the existing one.
 - Switch between tabbed view and tiled view with `View -> Tabs` and `View -> Tile All`.
 - The last selected view mode is saved and restored on startup.
 - Active terminal is highlighted in tiled view.
@@ -44,6 +47,7 @@ This creates both `Hosts -> VPS -> otherHost` and `Hosts -> Webserver -> otherHo
 - `Alt+Shift+Space`: toggle broadcast checkbox for the current terminal.
 - `Alt+Shift+Delete`: close current terminal.
 - `Ctrl+Insert`: copy selected terminal text.
+- `Alt+Shift+Insert`: copy selected terminal text to the AI terminal and focus it.
 - `Shift+Insert`: paste clipboard text into the current terminal.
 - `Ctrl+Shift++`: increase terminal font size.
 - `Ctrl+-`: decrease terminal font size.

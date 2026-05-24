@@ -3,6 +3,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -54,12 +55,15 @@
 #include <functional>
 #include <memory>
 #include <signal.h>
+#include <utility>
 
 struct TerminalSession
 {
     QTermWidget *terminal = nullptr;
     QString title;
     bool broadcastEnabled = true;
+    bool broadcastLocked = false;
+    bool isAiTerminal = false;
     bool hasFocus = false;
     bool isPrompt = false;
     bool persistentProcess = false;
@@ -72,6 +76,7 @@ static constexpr auto settingsViewModeTabs = "tabs";
 static constexpr auto settingsViewModeTile = "tile";
 static constexpr auto settingsUseScreenKey = "terminal/useScreen";
 static constexpr auto settingsTasksDirectoryKey = "tasks/directory";
+static constexpr auto settingsAiBinaryPathKey = "ai/binaryPath";
 
 struct TerminalUiState
 {
@@ -79,6 +84,7 @@ struct TerminalUiState
     ViewMode viewMode = ViewMode::Tile;
     bool useScreen = false;
     QString tasksDirectory;
+    QString aiBinaryPath;
     std::function<void()> renderCurrentView;
     std::function<void(TerminalSession *)> setActiveSession;
     std::function<void(TerminalSession *)> closeSession;
@@ -110,7 +116,10 @@ public:
         , session(session)
     {
         setChecked(session->broadcastEnabled);
-        setToolTip(QStringLiteral("Receive broadcast input"));
+        setEnabled(!session->broadcastLocked);
+        setToolTip(session->broadcastLocked
+                       ? QStringLiteral("Broadcast is disabled for this terminal")
+                       : QStringLiteral("Receive broadcast input"));
     }
 
     std::function<void(bool)> setAllChecked;
@@ -119,6 +128,10 @@ public:
 protected:
     void mouseReleaseEvent(QMouseEvent *event) override
     {
+        if (session->broadcastLocked) {
+            return;
+        }
+
         QCheckBox::mouseReleaseEvent(event);
         session->broadcastEnabled = isChecked();
 
@@ -182,9 +195,16 @@ private:
 class TerminalShortcutFilter : public QObject
 {
 public:
-    explicit TerminalShortcutFilter(const QFont &defaultTerminalFont, QObject *parent = nullptr)
+    TerminalShortcutFilter(TerminalUiState *state,
+                           const QFont &defaultTerminalFont,
+                           std::function<void(TerminalSession *)> focusSession,
+                           std::function<void(const QString &, int)> showStatusMessage,
+                           QObject *parent = nullptr)
         : QObject(parent)
+        , state(state)
         , defaultTerminalFont(defaultTerminalFont)
+        , focusSession(std::move(focusSession))
+        , showStatusMessage(std::move(showStatusMessage))
     {
     }
 
@@ -220,6 +240,38 @@ protected:
             return true;
         }
 
+        if (shift && alt && !ctrl && !meta && key == Qt::Key_Insert) {
+            terminal->copyClipboard();
+            const QString selectedText = QApplication::clipboard()->text();
+            TerminalSession *sourceSession = sessionForTerminal(state, terminal);
+            TerminalSession *targetSession = nullptr;
+            for (int i = state->sessions.count() - 1; i >= 0; --i) {
+                TerminalSession *candidate = state->sessions.at(i);
+                if (candidate->isAiTerminal && candidate != sourceSession) {
+                    targetSession = candidate;
+                    break;
+                }
+            }
+
+            if (!targetSession) {
+                if (showStatusMessage) {
+                    showStatusMessage(QStringLiteral("No AI terminal open"), 4000);
+                }
+            } else if (selectedText.isEmpty()) {
+                if (showStatusMessage) {
+                    showStatusMessage(QStringLiteral("No selected text to send to AI terminal"), 4000);
+                }
+            } else {
+                targetSession->terminal->sendText(selectedText);
+                if (focusSession) {
+                    focusSession(targetSession);
+                }
+            }
+
+            keyEvent->accept();
+            return true;
+        }
+
         if (shift && !ctrl && !alt && !meta && key == Qt::Key_Insert) {
             terminal->pasteClipboard();
             keyEvent->accept();
@@ -249,7 +301,10 @@ protected:
     }
 
 private:
+    TerminalUiState *state = nullptr;
     QFont defaultTerminalFont;
+    std::function<void(TerminalSession *)> focusSession;
+    std::function<void(const QString &, int)> showStatusMessage;
 };
 
 struct SshHostEntry
@@ -1024,6 +1079,7 @@ MainWindow::MainWindow(QWidget *parent)
                                                               QString::fromLatin1(settingsViewModeTile)));
     state->useScreen = settings.value(settingsUseScreenKey, false).toBool();
     state->tasksDirectory = settings.value(settingsTasksDirectoryKey).toString();
+    state->aiBinaryPath = settings.value(settingsAiBinaryPathKey).toString();
     qApp->installEventFilter(new TerminalFocusFilter(state, this));
     connect(qApp, &QCoreApplication::aboutToQuit, this, [state]() {
         for (TerminalSession *session : state->sessions) {
@@ -1071,6 +1127,9 @@ MainWindow::MainWindow(QWidget *parent)
 
     auto setAllBroadcast = [state](bool checked) {
         for (TerminalSession *session : state->sessions) {
+            if (session->broadcastLocked) {
+                continue;
+            }
             session->broadcastEnabled = checked;
         }
     };
@@ -1299,6 +1358,16 @@ MainWindow::MainWindow(QWidget *parent)
         return nullptr;
     };
 
+    auto aiSession = [state]() -> TerminalSession * {
+        for (TerminalSession *session : state->sessions) {
+            if (session->isAiTerminal) {
+                return session;
+            }
+        }
+
+        return nullptr;
+    };
+
     auto updateSessionTitle = [tabs, tileTitles](TerminalSession *session, const QString &title) {
         if (!session || session->title == title) {
             return;
@@ -1347,7 +1416,7 @@ MainWindow::MainWindow(QWidget *parent)
     auto *toggleCurrentBroadcastShortcut = new QShortcut(QKeySequence(Qt::ALT | Qt::SHIFT | Qt::Key_Space), this);
     connect(toggleCurrentBroadcastShortcut, &QShortcut::activated, this, [currentSession, state]() {
         TerminalSession *session = currentSession();
-        if (session) {
+        if (session && !session->broadcastLocked) {
             session->broadcastEnabled = !session->broadcastEnabled;
             state->renderCurrentView();
         }
@@ -1363,14 +1432,38 @@ MainWindow::MainWindow(QWidget *parent)
     QFont terminalFont = QApplication::font();
     terminalFont.setFamily(QStringLiteral("Monospace"));
     terminalFont.setPointSize(10);
-    auto *terminalShortcutFilter = new TerminalShortcutFilter(terminalFont, this);
+    auto activeStatusWarningToken = std::make_shared<int>(0);
+    auto activeStatusWarningMessage = std::make_shared<QString>();
+    connect(statusBar(), &QStatusBar::messageChanged, this, [this, activeStatusWarningMessage](const QString &currentMessage) {
+        if (!activeStatusWarningMessage->isEmpty() && currentMessage != *activeStatusWarningMessage) {
+            activeStatusWarningMessage->clear();
+            statusBar()->setStyleSheet(QString());
+        }
+    });
+    auto showStatusMessage = [this, activeStatusWarningToken, activeStatusWarningMessage](const QString &message, int timeoutMs) {
+        ++(*activeStatusWarningToken);
+        const int warningToken = *activeStatusWarningToken;
+        *activeStatusWarningMessage = message;
+        statusBar()->setStyleSheet(QStringLiteral("QStatusBar { background-color: #c62828; color: white; font-weight: 700; }"));
+        statusBar()->showMessage(message, timeoutMs);
+        QTimer::singleShot(timeoutMs, this, [this, activeStatusWarningToken, activeStatusWarningMessage, warningToken]() {
+            if (*activeStatusWarningToken == warningToken) {
+                activeStatusWarningMessage->clear();
+                statusBar()->setStyleSheet(QString());
+            }
+        });
+    };
+    auto *terminalShortcutFilter = new TerminalShortcutFilter(state, terminalFont, focusSession, showStatusMessage, this);
     QApplication::instance()->installEventFilter(terminalShortcutFilter);
 
     auto createTerminal = [this, state, terminalFont, updateSessionTitle, terminalShortcutFilter](
                               const QString &tabName = QStringLiteral("Terminal"),
                               const QString &program = QString(),
                               const QStringList &args = QStringList(),
-                              bool persistentProcess = false) {
+                              bool persistentProcess = false,
+                              bool initialBroadcastEnabled = true,
+                              bool broadcastLocked = false,
+                              bool isAiTerminal = false) {
         QString terminalProgram = program;
         QStringList terminalArgs = args;
         if (terminalProgram.isEmpty() && state->useScreen) {
@@ -1384,7 +1477,16 @@ MainWindow::MainWindow(QWidget *parent)
 
         const bool useCustomProgram = !terminalProgram.isEmpty();
         auto *terminal = new QTermWidget(useCustomProgram ? 0 : 1, this);
-        auto *session = new TerminalSession{terminal, tabName, true, true, false, persistentProcess};
+        auto *session = new TerminalSession{
+            terminal,
+            tabName,
+            broadcastLocked ? false : initialBroadcastEnabled,
+            broadcastLocked,
+            isAiTerminal,
+            true,
+            false,
+            persistentProcess,
+        };
         for (TerminalSession *otherSession : state->sessions) {
             otherSession->hasFocus = false;
         }
@@ -1489,6 +1591,85 @@ MainWindow::MainWindow(QWidget *parent)
         state->useScreen = checked;
         QSettings().setValue(settingsUseScreenKey, checked);
     });
+
+    auto *aiMenu = menuBar()->addMenu(QStringLiteral("AI"));
+    aiMenu->menuAction()->setStatusTip(QStringLiteral("Start configured AI command-line tools"));
+    auto *selectAiBinaryAction = aiMenu->addAction(QStringLiteral("Select AI Binary..."));
+    selectAiBinaryAction->setStatusTip(QStringLiteral("Choose the AI command binary to launch"));
+    auto *startAiAction = aiMenu->addAction(QStringLiteral("Start AI"));
+    startAiAction->setStatusTip(QStringLiteral("Start the configured AI binary in a terminal"));
+    auto *currentAiBinaryAction = aiMenu->addAction(QStringLiteral("Binary: Not set"));
+    currentAiBinaryAction->setEnabled(false);
+
+    auto updateAiActions = [state, startAiAction, currentAiBinaryAction]() {
+        const QFileInfo binaryInfo(state->aiBinaryPath);
+        const bool hasExecutableBinary = !state->aiBinaryPath.isEmpty()
+            && binaryInfo.exists()
+            && binaryInfo.isFile()
+            && binaryInfo.isExecutable();
+
+        startAiAction->setEnabled(hasExecutableBinary);
+        currentAiBinaryAction->setText(
+            state->aiBinaryPath.isEmpty()
+                ? QStringLiteral("Binary: Not set")
+                : QStringLiteral("Binary: %1").arg(QDir::toNativeSeparators(state->aiBinaryPath)));
+        currentAiBinaryAction->setStatusTip(state->aiBinaryPath);
+    };
+
+    connect(selectAiBinaryAction, &QAction::triggered, this, [this, state, updateAiActions]() {
+        const QString startDirectory = QFileInfo(state->aiBinaryPath).exists()
+                                           ? QFileInfo(state->aiBinaryPath).absolutePath()
+                                           : QDir::homePath();
+        const QString selectedBinary = QFileDialog::getOpenFileName(
+            this,
+            QStringLiteral("Select AI Binary"),
+            startDirectory);
+        if (selectedBinary.isEmpty()) {
+            return;
+        }
+
+        const QFileInfo binaryInfo(selectedBinary);
+        if (!binaryInfo.exists() || !binaryInfo.isFile() || !binaryInfo.isExecutable()) {
+            QMessageBox::warning(
+                this,
+                QStringLiteral("AI binary is not executable"),
+                QStringLiteral("Choose an executable binary file."));
+            return;
+        }
+
+        state->aiBinaryPath = binaryInfo.absoluteFilePath();
+        QSettings().setValue(settingsAiBinaryPathKey, state->aiBinaryPath);
+        updateAiActions();
+    });
+
+    connect(startAiAction, &QAction::triggered, this, [this, state, createTerminal, aiSession, focusSession]() {
+        if (TerminalSession *session = aiSession()) {
+            focusSession(session);
+            return;
+        }
+
+        const QFileInfo binaryInfo(state->aiBinaryPath);
+        if (state->aiBinaryPath.isEmpty()
+            || !binaryInfo.exists()
+            || !binaryInfo.isFile()
+            || !binaryInfo.isExecutable()) {
+            QMessageBox::warning(
+                this,
+                QStringLiteral("AI binary is not configured"),
+                QStringLiteral("Choose an executable AI binary first."));
+            return;
+        }
+
+        createTerminal(QStringLiteral("AI: %1").arg(binaryInfo.fileName()),
+                       binaryInfo.absoluteFilePath(),
+                       QStringList(),
+                       false,
+                       false,
+                       true,
+                       true);
+    });
+
+    updateAiActions();
 
     auto openHost = [state, createTerminal](const QString &host) {
         createTerminal(host, QStringLiteral("/bin/bash"), QStringList{QStringLiteral("-lc"), sshLauncherScript(host, state->useScreen)});
