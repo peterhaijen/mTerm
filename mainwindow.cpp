@@ -10,6 +10,7 @@
 #include <QDirIterator>
 #include <QEvent>
 #include <QFile>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QFileSystemWatcher>
 #include <QFont>
@@ -50,6 +51,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <functional>
+#include <memory>
 #include <signal.h>
 
 struct TerminalSession
@@ -68,12 +70,14 @@ static constexpr auto settingsViewModeKey = "ui/viewMode";
 static constexpr auto settingsViewModeTabs = "tabs";
 static constexpr auto settingsViewModeTile = "tile";
 static constexpr auto settingsUseScreenKey = "terminal/useScreen";
+static constexpr auto settingsTasksDirectoryKey = "tasks/directory";
 
 struct TerminalUiState
 {
     QList<TerminalSession *> sessions;
     ViewMode viewMode = ViewMode::Tile;
     bool useScreen = false;
+    QString tasksDirectory;
     std::function<void()> renderCurrentView;
     std::function<void(TerminalSession *)> setActiveSession;
     std::function<void(TerminalSession *)> closeSession;
@@ -524,16 +528,15 @@ static QString markdownTaskTitle(const QString &path)
     return {};
 }
 
-static QList<TaskFileEntry> readVaultTaskFiles()
+static QList<TaskFileEntry> readTaskFiles(const QString &tasksDirectoryPath)
 {
-    const QString vaultPath = QDir::home().filePath(QStringLiteral("vault33"));
-    QDir vaultDirectory(vaultPath);
-    if (!vaultDirectory.exists()) {
+    QDir tasksDirectory(tasksDirectoryPath);
+    if (tasksDirectoryPath.isEmpty() || !tasksDirectory.exists()) {
         return {};
     }
 
     QList<TaskFileEntry> entries;
-    QDirIterator iterator(vaultPath,
+    QDirIterator iterator(tasksDirectory.absolutePath(),
                           QStringList{QStringLiteral("*.md")},
                           QDir::Files,
                           QDirIterator::Subdirectories);
@@ -992,6 +995,7 @@ MainWindow::MainWindow(QWidget *parent)
     state->viewMode = viewModeFromSettingValue(settings.value(settingsViewModeKey,
                                                               QString::fromLatin1(settingsViewModeTile)));
     state->useScreen = settings.value(settingsUseScreenKey, false).toBool();
+    state->tasksDirectory = settings.value(settingsTasksDirectoryKey).toString();
     qApp->installEventFilter(new TerminalFocusFilter(state, this));
     connect(qApp, &QCoreApplication::aboutToQuit, this, [state]() {
         for (TerminalSession *session : state->sessions) {
@@ -1598,13 +1602,60 @@ MainWindow::MainWindow(QWidget *parent)
     rebuildHostsMenu();
 
     auto *tasksMenu = menuBar()->addMenu(QStringLiteral("Tasks"));
-    tasksMenu->menuAction()->setStatusTip(QStringLiteral("Run mterm tasks from ~/vault33"));
-    const QList<TaskFileEntry> taskFiles = readVaultTaskFiles();
-    if (taskFiles.isEmpty()) {
-        auto *emptyTasksAction = tasksMenu->addAction(QStringLiteral("No mterm tasks found"));
-        emptyTasksAction->setEnabled(false);
-        emptyTasksAction->setStatusTip(QStringLiteral("No markdown files tagged with mterm were found in ~/vault33"));
-    } else {
+    tasksMenu->menuAction()->setStatusTip(QStringLiteral("Run mterm tasks from the configured tasks directory"));
+
+    auto rebuildTasksMenu = std::make_shared<std::function<void()>>();
+    std::weak_ptr<std::function<void()>> rebuildTasksMenuWeak = rebuildTasksMenu;
+    *rebuildTasksMenu = [this, state, tasksMenu, currentSession, rebuildTasksMenuWeak]() {
+        tasksMenu->clear();
+
+        auto *selectTasksDirectoryAction = tasksMenu->addAction(QStringLiteral("Select Tasks Directory..."));
+        selectTasksDirectoryAction->setStatusTip(QStringLiteral("Choose the folder scanned for mterm task markdown files"));
+        if (const auto rebuildTasksMenu = rebuildTasksMenuWeak.lock()) {
+            connect(selectTasksDirectoryAction, &QAction::triggered, this, [this, state, rebuildTasksMenu]() {
+                const QString startDirectory = QDir(state->tasksDirectory).exists()
+                                                   ? state->tasksDirectory
+                                                   : QDir::homePath();
+                const QString selectedDirectory = QFileDialog::getExistingDirectory(
+                    this,
+                    QStringLiteral("Select Tasks Directory"),
+                    startDirectory);
+                if (selectedDirectory.isEmpty()) {
+                    return;
+                }
+
+                state->tasksDirectory = QDir(selectedDirectory).absolutePath();
+                QSettings().setValue(settingsTasksDirectoryKey, state->tasksDirectory);
+                (*rebuildTasksMenu)();
+            });
+        } else {
+            selectTasksDirectoryAction->setEnabled(false);
+            selectTasksDirectoryAction->setStatusTip(QStringLiteral("Tasks menu cannot be rebuilt"));
+        }
+
+        const QString currentDirectoryText = state->tasksDirectory.isEmpty()
+                                                 ? QStringLiteral("Directory: Not set")
+                                                 : QStringLiteral("Directory: %1").arg(QDir::toNativeSeparators(state->tasksDirectory));
+        auto *currentDirectoryAction = tasksMenu->addAction(currentDirectoryText);
+        currentDirectoryAction->setEnabled(false);
+        currentDirectoryAction->setStatusTip(state->tasksDirectory);
+        tasksMenu->addSeparator();
+
+        if (state->tasksDirectory.isEmpty()) {
+            auto *noDirectoryAction = tasksMenu->addAction(QStringLiteral("No tasks directory selected"));
+            noDirectoryAction->setEnabled(false);
+            noDirectoryAction->setStatusTip(QStringLiteral("Choose a tasks directory first"));
+            return;
+        }
+
+        const QList<TaskFileEntry> taskFiles = readTaskFiles(state->tasksDirectory);
+        if (taskFiles.isEmpty()) {
+            auto *emptyTasksAction = tasksMenu->addAction(QStringLiteral("No mterm tasks found"));
+            emptyTasksAction->setEnabled(false);
+            emptyTasksAction->setStatusTip(QStringLiteral("No markdown files tagged with mterm were found in %1").arg(state->tasksDirectory));
+            return;
+        }
+
         for (const TaskFileEntry &taskFile : taskFiles) {
             QAction *taskAction = tasksMenu->addAction(taskFile.title);
             taskAction->setToolTip(taskFile.path);
@@ -1664,7 +1715,8 @@ MainWindow::MainWindow(QWidget *parent)
                 }
             });
         }
-    }
+    };
+    (*rebuildTasksMenu)();
 
     const QString sshConfigPath = QDir::home().filePath(QStringLiteral(".ssh/config"));
     const QString sshDirectoryPath = QDir::home().filePath(QStringLiteral(".ssh"));
