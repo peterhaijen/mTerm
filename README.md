@@ -26,7 +26,11 @@ Host otherHost
 This creates both `Hosts -> VPS -> otherHost` and `Hosts -> Webserver -> otherHost`. Each group also gets an `Open All` action.
 
 - SSH host tabs run through a small shell wrapper: a successful SSH exit closes the tab immediately, and a failed SSH exit shows a 10-second countdown in the terminal. Press any key during the countdown to keep the tab open in a local shell.
+- Screen integration is off by default and can be enabled with `Terminal -> Use screen sessions`.
+- When enabled, local terminals attach to a `screen` session named `mterm` if `screen` is installed; otherwise they fall back to the default shell.
+- When enabled, SSH host tabs attach to a remote `screen` session named `mterm` if `screen` is installed on the remote host; otherwise they fall back to the remote login shell.
 - Switch between tabbed view and tiled view with `View -> Tabs` and `View -> Tile All`.
+- The last selected view mode is saved and restored on startup.
 - Active terminal is highlighted in tiled view.
 - Terminal titles can update from detected shell prompts such as `user@host:~$`.
 - Empty window message when no terminals are open.

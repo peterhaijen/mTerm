@@ -1,12 +1,15 @@
 #include "mainwindow.h"
 
 #include <QApplication>
+#include <QCoreApplication>
 #include <QLocale>
 #include <QTranslator>
 
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
+    QCoreApplication::setOrganizationName(QStringLiteral("mTerm"));
+    QCoreApplication::setApplicationName(QStringLiteral("mTerm"));
 
     QTranslator translator;
     const QStringList uiLanguages = QLocale::system().uiLanguages();

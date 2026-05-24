@@ -28,15 +28,18 @@
 #include <QRegularExpression>
 #include <QScreen>
 #include <QScrollArea>
+#include <QSettings>
 #include <QSet>
 #include <QShortcut>
 #include <QStatusBar>
+#include <QStandardPaths>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTextStream>
 #include <QThread>
 #include <QTimer>
 #include <QToolButton>
+#include <QVariant>
 #include <QVector>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -56,20 +59,43 @@ struct TerminalSession
     bool broadcastEnabled = true;
     bool hasFocus = false;
     bool isPrompt = false;
+    bool persistentProcess = false;
 };
 
 enum class ViewMode { Tabs, Tile };
+
+static constexpr auto settingsViewModeKey = "ui/viewMode";
+static constexpr auto settingsViewModeTabs = "tabs";
+static constexpr auto settingsViewModeTile = "tile";
+static constexpr auto settingsUseScreenKey = "terminal/useScreen";
 
 struct TerminalUiState
 {
     QList<TerminalSession *> sessions;
     ViewMode viewMode = ViewMode::Tile;
+    bool useScreen = false;
     std::function<void()> renderCurrentView;
     std::function<void(TerminalSession *)> setActiveSession;
     std::function<void(TerminalSession *)> closeSession;
 };
 
 static TerminalSession *sessionForTerminal(TerminalUiState *state, QTermWidget *terminal);
+
+static QString viewModeSettingValue(ViewMode viewMode)
+{
+    return QString::fromLatin1(viewMode == ViewMode::Tabs
+                                   ? settingsViewModeTabs
+                                   : settingsViewModeTile);
+}
+
+static ViewMode viewModeFromSettingValue(const QVariant &value)
+{
+    if (value.toString() == QString::fromLatin1(settingsViewModeTabs)) {
+        return ViewMode::Tabs;
+    }
+
+    return ViewMode::Tile;
+}
 
 class BroadcastCheckBox : public QCheckBox
 {
@@ -838,11 +864,47 @@ static QString shellSingleQuote(QString text)
     return QStringLiteral("'") + text + QStringLiteral("'");
 }
 
-static QString sshLauncherScript(const QString &host)
+static QString screenAttachScript()
+{
+    return QStringLiteral(
+        "screen_session_name=mterm\n"
+        "screen_session=$(\"$screen_program\" -ls | sed -n 's/^[[:space:]]*\\([0-9][^[:space:]]*\\.mterm\\)[[:space:]].*/\\1/p' | head -n 1)\n"
+        "if [ -n \"$screen_session\" ]; then\n"
+        "    exec \"$screen_program\" -q -x \"$screen_session\"\n"
+        "fi\n"
+        "exec \"$screen_program\" -q -S \"$screen_session_name\" -xRR\n");
+}
+
+static QString localScreenLauncherScript(const QString &screenPath)
+{
+    return QStringLiteral("screen_program=")
+        + shellSingleQuote(screenPath)
+        + QStringLiteral("\n")
+        + screenAttachScript();
+}
+
+static QString sshLauncherScript(const QString &host, bool useScreen)
 {
     const QString quotedHost = shellSingleQuote(host);
-    return QStringLiteral("ssh ")
-        + quotedHost
+    QString sshCommand = QStringLiteral("ssh ") + quotedHost;
+    QString remoteCommand;
+    if (useScreen) {
+        remoteCommand = QStringLiteral(
+            "if screen_program=$(command -v screen 2>/dev/null); then\n")
+            + screenAttachScript()
+            + QStringLiteral(
+                "fi\n"
+                "if [ -n \"$SHELL\" ]; then\n"
+                "    exec \"$SHELL\" -l\n"
+                "fi\n"
+                "exec /bin/sh -l\n");
+        sshCommand = QStringLiteral("ssh -tt ")
+            + quotedHost
+            + QStringLiteral(" ")
+            + shellSingleQuote(remoteCommand);
+    }
+
+    return sshCommand
         + QStringLiteral(
               "\n"
               "status=$?\n"
@@ -866,6 +928,11 @@ static QString sshLauncherScript(const QString &host)
               "done\n"
               "printf '\\n'\n"
               "exit \"$status\"\n");
+}
+
+static QString screenProgramPath()
+{
+    return QStandardPaths::findExecutable(QStringLiteral("screen"));
 }
 
 static bool processExists(int pid)
@@ -920,11 +987,15 @@ MainWindow::MainWindow(QWidget *parent)
 {
     statusBar()->showMessage(QStringLiteral("Ready"));
 
+    QSettings settings;
     auto *state = new TerminalUiState;
+    state->viewMode = viewModeFromSettingValue(settings.value(settingsViewModeKey,
+                                                              QString::fromLatin1(settingsViewModeTile)));
+    state->useScreen = settings.value(settingsUseScreenKey, false).toBool();
     qApp->installEventFilter(new TerminalFocusFilter(state, this));
     connect(qApp, &QCoreApplication::aboutToQuit, this, [state]() {
         for (TerminalSession *session : state->sessions) {
-            if (session->terminal) {
+            if (session->terminal && !session->persistentProcess) {
                 stopTerminalProcess(session->terminal);
             }
         }
@@ -1158,7 +1229,9 @@ MainWindow::MainWindow(QWidget *parent)
         const int closedIndex = state->sessions.indexOf(session);
         state->sessions.removeAll(session);
         QObject::disconnect(session->terminal, nullptr, nullptr, nullptr);
-        stopTerminalProcess(session->terminal);
+        if (!session->persistentProcess) {
+            stopTerminalProcess(session->terminal);
+        }
         session->terminal->setParent(nullptr);
         session->terminal->deleteLater();
         delete session;
@@ -1264,10 +1337,22 @@ MainWindow::MainWindow(QWidget *parent)
     auto createTerminal = [this, state, terminalFont, updateSessionTitle, terminalShortcutFilter](
                               const QString &tabName = QStringLiteral("Terminal"),
                               const QString &program = QString(),
-                              const QStringList &args = QStringList()) {
-        const bool useCustomProgram = !program.isEmpty();
+                              const QStringList &args = QStringList(),
+                              bool persistentProcess = false) {
+        QString terminalProgram = program;
+        QStringList terminalArgs = args;
+        if (terminalProgram.isEmpty() && state->useScreen) {
+            const QString screenPath = screenProgramPath();
+            if (!screenPath.isEmpty()) {
+                terminalProgram = QStringLiteral("/bin/sh");
+                terminalArgs = QStringList{QStringLiteral("-lc"), localScreenLauncherScript(screenPath)};
+                persistentProcess = true;
+            }
+        }
+
+        const bool useCustomProgram = !terminalProgram.isEmpty();
         auto *terminal = new QTermWidget(useCustomProgram ? 0 : 1, this);
-        auto *session = new TerminalSession{terminal, tabName, true, true};
+        auto *session = new TerminalSession{terminal, tabName, true, true, false, persistentProcess};
         for (TerminalSession *otherSession : state->sessions) {
             otherSession->hasFocus = false;
         }
@@ -1322,8 +1407,8 @@ MainWindow::MainWindow(QWidget *parent)
         terminal->setFocus();
 
         if (useCustomProgram) {
-            terminal->setShellProgram(program);
-            terminal->setArgs(args);
+            terminal->setShellProgram(terminalProgram);
+            terminal->setArgs(terminalArgs);
             terminal->startShellProgram();
         }
 
@@ -1339,17 +1424,18 @@ MainWindow::MainWindow(QWidget *parent)
     viewMenu->menuAction()->setStatusTip(QStringLiteral("Change terminal layout"));
     auto *tabsViewAction = viewMenu->addAction(QStringLiteral("Tabs"));
     tabsViewAction->setCheckable(true);
-    tabsViewAction->setChecked(false);
+    tabsViewAction->setChecked(state->viewMode == ViewMode::Tabs);
     tabsViewAction->setStatusTip(QStringLiteral("Show one terminal per tab"));
     auto *tileViewAction = viewMenu->addAction(QStringLiteral("Tile All"));
     tileViewAction->setCheckable(true);
-    tileViewAction->setChecked(true);
+    tileViewAction->setChecked(state->viewMode == ViewMode::Tile);
     tileViewAction->setStatusTip(QStringLiteral("Show all terminals in a tiled layout"));
 
     connect(tabsViewAction, &QAction::triggered, this, [state, tabsViewAction, tileViewAction]() {
         state->viewMode = ViewMode::Tabs;
         tabsViewAction->setChecked(true);
         tileViewAction->setChecked(false);
+        QSettings().setValue(settingsViewModeKey, viewModeSettingValue(state->viewMode));
         state->renderCurrentView();
     });
 
@@ -1357,11 +1443,23 @@ MainWindow::MainWindow(QWidget *parent)
         state->viewMode = ViewMode::Tile;
         tabsViewAction->setChecked(false);
         tileViewAction->setChecked(true);
+        QSettings().setValue(settingsViewModeKey, viewModeSettingValue(state->viewMode));
         state->renderCurrentView();
     });
 
-    auto openHost = [createTerminal](const QString &host) {
-        createTerminal(host, QStringLiteral("/bin/bash"), QStringList{QStringLiteral("-lc"), sshLauncherScript(host)});
+    auto *terminalMenu = menuBar()->addMenu(QStringLiteral("Terminal"));
+    terminalMenu->menuAction()->setStatusTip(QStringLiteral("Terminal behavior"));
+    auto *useScreenAction = terminalMenu->addAction(QStringLiteral("Use screen sessions"));
+    useScreenAction->setCheckable(true);
+    useScreenAction->setChecked(state->useScreen);
+    useScreenAction->setStatusTip(QStringLiteral("Use screen sessions for new local and SSH terminals"));
+    connect(useScreenAction, &QAction::toggled, this, [state](bool checked) {
+        state->useScreen = checked;
+        QSettings().setValue(settingsUseScreenKey, checked);
+    });
+
+    auto openHost = [state, createTerminal](const QString &host) {
+        createTerminal(host, QStringLiteral("/bin/bash"), QStringList{QStringLiteral("-lc"), sshLauncherScript(host, state->useScreen)});
     };
 
     auto *hostsMenu = menuBar()->addMenu(QStringLiteral("Hosts"));
