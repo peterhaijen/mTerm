@@ -29,6 +29,7 @@ This creates both `Hosts -> VPS -> otherHost` and `Hosts -> Webserver -> otherHo
 - Screen integration is off by default and can be enabled with `Terminal -> Use screen sessions`.
 - When enabled, local terminals attach to a `screen` session named `mterm` if `screen` is installed; otherwise they fall back to the default shell.
 - When enabled, SSH host tabs attach to a remote `screen` session named `mterm` if `screen` is installed on the remote host; otherwise they fall back to the remote login shell.
+- If the `mterm` screen session is already attached, new terminals use a normal shell instead of attaching a second time.
 - Choose the folder scanned for markdown task files with `Tasks -> Select Tasks Directory...`.
 - Switch between tabbed view and tiled view with `View -> Tabs` and `View -> Tile All`.
 - The last selected view mode is saved and restored on startup.

@@ -25,6 +25,7 @@
 #include <QMap>
 #include <QMessageBox>
 #include <QMouseEvent>
+#include <QProcess>
 #include <QRect>
 #include <QRegularExpression>
 #include <QScreen>
@@ -871,7 +872,15 @@ static QString screenAttachScript()
 {
     return QStringLiteral(
         "screen_session_name=mterm\n"
-        "screen_session=$(\"$screen_program\" -ls | sed -n 's/^[[:space:]]*\\([0-9][^[:space:]]*\\.mterm\\)[[:space:]].*/\\1/p' | head -n 1)\n"
+        "screen_list=$(\"$screen_program\" -ls 2>/dev/null)\n"
+        "screen_attached_session=$(printf '%s\\n' \"$screen_list\" | sed -n 's/^[[:space:]]*\\([0-9][^[:space:]]*\\.mterm\\)[[:space:]].*(Attached).*/\\1/p' | head -n 1)\n"
+        "if [ -n \"$screen_attached_session\" ]; then\n"
+        "    if [ -n \"$SHELL\" ]; then\n"
+        "        exec \"$SHELL\" -l\n"
+        "    fi\n"
+        "    exec /bin/sh -l\n"
+        "fi\n"
+        "screen_session=$(printf '%s\\n' \"$screen_list\" | sed -n 's/^[[:space:]]*\\([0-9][^[:space:]]*\\.mterm\\)[[:space:]].*/\\1/p' | head -n 1)\n"
         "if [ -n \"$screen_session\" ]; then\n"
         "    exec \"$screen_program\" -q -x \"$screen_session\"\n"
         "fi\n"
@@ -884,6 +893,25 @@ static QString localScreenLauncherScript(const QString &screenPath)
         + shellSingleQuote(screenPath)
         + QStringLiteral("\n")
         + screenAttachScript();
+}
+
+static bool screenSessionIsAttached(const QString &screenPath)
+{
+    QProcess screenList;
+    screenList.setProgram(screenPath);
+    screenList.setArguments(QStringList{QStringLiteral("-ls")});
+    screenList.setProcessChannelMode(QProcess::MergedChannels);
+    screenList.start();
+    if (!screenList.waitForFinished(1000)) {
+        screenList.kill();
+        screenList.waitForFinished();
+        return false;
+    }
+
+    const QString output = QString::fromLocal8Bit(screenList.readAll());
+    static const QRegularExpression attachedSessionRegex(
+        QStringLiteral("(^|\\n)\\s*[0-9][^\\s]*\\.mterm\\s+.*\\(Attached\\)"));
+    return attachedSessionRegex.match(output).hasMatch();
 }
 
 static QString sshLauncherScript(const QString &host, bool useScreen)
@@ -1347,7 +1375,7 @@ MainWindow::MainWindow(QWidget *parent)
         QStringList terminalArgs = args;
         if (terminalProgram.isEmpty() && state->useScreen) {
             const QString screenPath = screenProgramPath();
-            if (!screenPath.isEmpty()) {
+            if (!screenPath.isEmpty() && !screenSessionIsAttached(screenPath)) {
                 terminalProgram = QStringLiteral("/bin/sh");
                 terminalArgs = QStringList{QStringLiteral("-lc"), localScreenLauncherScript(screenPath)};
                 persistentProcess = true;
