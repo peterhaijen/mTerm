@@ -71,13 +71,6 @@ struct TerminalSession
 
 enum class ViewMode { Tabs, Tile };
 
-static constexpr auto settingsViewModeKey = "ui/viewMode";
-static constexpr auto settingsViewModeTabs = "tabs";
-static constexpr auto settingsViewModeTile = "tile";
-static constexpr auto settingsUseScreenKey = "terminal/useScreen";
-static constexpr auto settingsTasksDirectoryKey = "tasks/directory";
-static constexpr auto settingsAiBinaryPathKey = "ai/binaryPath";
-
 struct TerminalUiState
 {
     QList<TerminalSession *> sessions;
@@ -92,20 +85,70 @@ struct TerminalUiState
 
 static TerminalSession *sessionForTerminal(TerminalUiState *state, QTermWidget *terminal);
 
-static QString viewModeSettingValue(ViewMode viewMode)
+namespace AppSettings
+{
+static constexpr auto viewModeKey = "ui/viewMode";
+static constexpr auto viewModeTabs = "tabs";
+static constexpr auto viewModeTile = "tile";
+static constexpr auto useScreenKey = "terminal/useScreen";
+static constexpr auto tasksDirectoryKey = "tasks/directory";
+static constexpr auto aiBinaryPathKey = "ai/binaryPath";
+
+static QString viewModeValue(ViewMode viewMode)
 {
     return QString::fromLatin1(viewMode == ViewMode::Tabs
-                                   ? settingsViewModeTabs
-                                   : settingsViewModeTile);
+                                   ? viewModeTabs
+                                   : viewModeTile);
 }
 
-static ViewMode viewModeFromSettingValue(const QVariant &value)
+static ViewMode viewModeFromValue(const QVariant &value)
 {
-    if (value.toString() == QString::fromLatin1(settingsViewModeTabs)) {
+    if (value.toString() == QString::fromLatin1(viewModeTabs)) {
         return ViewMode::Tabs;
     }
 
     return ViewMode::Tile;
+}
+
+static ViewMode loadViewMode()
+{
+    return viewModeFromValue(QSettings().value(viewModeKey, QString::fromLatin1(viewModeTile)));
+}
+
+static void saveViewMode(ViewMode viewMode)
+{
+    QSettings().setValue(viewModeKey, viewModeValue(viewMode));
+}
+
+static bool loadUseScreen()
+{
+    return QSettings().value(useScreenKey, false).toBool();
+}
+
+static void saveUseScreen(bool useScreen)
+{
+    QSettings().setValue(useScreenKey, useScreen);
+}
+
+static QString loadTasksDirectory()
+{
+    return QSettings().value(tasksDirectoryKey).toString();
+}
+
+static void saveTasksDirectory(const QString &tasksDirectory)
+{
+    QSettings().setValue(tasksDirectoryKey, tasksDirectory);
+}
+
+static QString loadAiBinaryPath()
+{
+    return QSettings().value(aiBinaryPathKey).toString();
+}
+
+static void saveAiBinaryPath(const QString &aiBinaryPath)
+{
+    QSettings().setValue(aiBinaryPathKey, aiBinaryPath);
+}
 }
 
 class BroadcastCheckBox : public QCheckBox
@@ -1073,13 +1116,11 @@ MainWindow::MainWindow(QWidget *parent)
 {
     statusBar()->showMessage(QStringLiteral("Ready"));
 
-    QSettings settings;
     auto *state = new TerminalUiState;
-    state->viewMode = viewModeFromSettingValue(settings.value(settingsViewModeKey,
-                                                              QString::fromLatin1(settingsViewModeTile)));
-    state->useScreen = settings.value(settingsUseScreenKey, false).toBool();
-    state->tasksDirectory = settings.value(settingsTasksDirectoryKey).toString();
-    state->aiBinaryPath = settings.value(settingsAiBinaryPathKey).toString();
+    state->viewMode = AppSettings::loadViewMode();
+    state->useScreen = AppSettings::loadUseScreen();
+    state->tasksDirectory = AppSettings::loadTasksDirectory();
+    state->aiBinaryPath = AppSettings::loadAiBinaryPath();
     qApp->installEventFilter(new TerminalFocusFilter(state, this));
     connect(qApp, &QCoreApplication::aboutToQuit, this, [state]() {
         for (TerminalSession *session : state->sessions) {
@@ -1105,7 +1146,7 @@ MainWindow::MainWindow(QWidget *parent)
         QStringLiteral(
             "<div style='text-align:center; line-height:1.35;'>"
             "<p><b>mTerm</b> broadcasts your keystrokes to multiple terminals at once.</p>"
-            "<p>Open terminals from the <b>Hosts</b> menu, then use the checkboxes to choose which sessions receive shared input.</p>"
+            "<p>Open terminals from the <b>Terminals</b> menu, then use the checkboxes to choose which sessions receive shared input.</p>"
             "<p style='color:#c62828;'><b>Warning:</b> work carefully. One bad command can hit many systems very fast.</p>"
             "<p style='color:#c62828;'>I take no responsibility if something breaks; if it breaks, you get to keep both pieces :)</p>"
             "</div>"),
@@ -1456,7 +1497,7 @@ MainWindow::MainWindow(QWidget *parent)
     auto *terminalShortcutFilter = new TerminalShortcutFilter(state, terminalFont, focusSession, showStatusMessage, this);
     QApplication::instance()->installEventFilter(terminalShortcutFilter);
 
-    auto createTerminal = [this, state, terminalFont, updateSessionTitle, terminalShortcutFilter](
+    auto createTerminal = [this, state, terminalFont, updateSessionTitle, terminalShortcutFilter, focusSession](
                               const QString &tabName = QStringLiteral("Terminal"),
                               const QString &program = QString(),
                               const QStringList &args = QStringList(),
@@ -1538,7 +1579,7 @@ MainWindow::MainWindow(QWidget *parent)
         });
 
         state->renderCurrentView();
-        terminal->setFocus();
+        focusSession(session);
 
         if (useCustomProgram) {
             terminal->setShellProgram(terminalProgram);
@@ -1554,13 +1595,15 @@ MainWindow::MainWindow(QWidget *parent)
     auto *exitAction = fileMenu->addAction(QStringLiteral("Exit"), this, &QWidget::close);
     exitAction->setStatusTip(QStringLiteral("Close mTerm"));
 
-    auto *viewMenu = menuBar()->addMenu(QStringLiteral("View"));
-    viewMenu->menuAction()->setStatusTip(QStringLiteral("Change terminal layout"));
-    auto *tabsViewAction = viewMenu->addAction(QStringLiteral("Tabs"));
+    auto *settingsMenu = menuBar()->addMenu(QStringLiteral("Settings"));
+    settingsMenu->menuAction()->setStatusTip(QStringLiteral("Configure mTerm"));
+
+    auto *layoutSettingsMenu = settingsMenu->addMenu(QStringLiteral("Layout"));
+    auto *tabsViewAction = layoutSettingsMenu->addAction(QStringLiteral("Tabs"));
     tabsViewAction->setCheckable(true);
     tabsViewAction->setChecked(state->viewMode == ViewMode::Tabs);
     tabsViewAction->setStatusTip(QStringLiteral("Show one terminal per tab"));
-    auto *tileViewAction = viewMenu->addAction(QStringLiteral("Tile All"));
+    auto *tileViewAction = layoutSettingsMenu->addAction(QStringLiteral("Tile All"));
     tileViewAction->setCheckable(true);
     tileViewAction->setChecked(state->viewMode == ViewMode::Tile);
     tileViewAction->setStatusTip(QStringLiteral("Show all terminals in a tiled layout"));
@@ -1569,7 +1612,7 @@ MainWindow::MainWindow(QWidget *parent)
         state->viewMode = ViewMode::Tabs;
         tabsViewAction->setChecked(true);
         tileViewAction->setChecked(false);
-        QSettings().setValue(settingsViewModeKey, viewModeSettingValue(state->viewMode));
+        AppSettings::saveViewMode(state->viewMode);
         state->renderCurrentView();
     });
 
@@ -1577,46 +1620,34 @@ MainWindow::MainWindow(QWidget *parent)
         state->viewMode = ViewMode::Tile;
         tabsViewAction->setChecked(false);
         tileViewAction->setChecked(true);
-        QSettings().setValue(settingsViewModeKey, viewModeSettingValue(state->viewMode));
+        AppSettings::saveViewMode(state->viewMode);
         state->renderCurrentView();
     });
 
-    auto *terminalMenu = menuBar()->addMenu(QStringLiteral("Terminal"));
-    terminalMenu->menuAction()->setStatusTip(QStringLiteral("Terminal behavior"));
-    auto *useScreenAction = terminalMenu->addAction(QStringLiteral("Use screen sessions"));
+    auto *useScreenAction = settingsMenu->addAction(QStringLiteral("Use screen sessions"));
     useScreenAction->setCheckable(true);
     useScreenAction->setChecked(state->useScreen);
     useScreenAction->setStatusTip(QStringLiteral("Use screen sessions for new local and SSH terminals"));
     connect(useScreenAction, &QAction::toggled, this, [state](bool checked) {
         state->useScreen = checked;
-        QSettings().setValue(settingsUseScreenKey, checked);
+        AppSettings::saveUseScreen(checked);
     });
 
-    auto *aiMenu = menuBar()->addMenu(QStringLiteral("AI"));
-    aiMenu->menuAction()->setStatusTip(QStringLiteral("Start configured AI command-line tools"));
-    auto *selectAiBinaryAction = aiMenu->addAction(QStringLiteral("Select AI Binary..."));
+    auto *selectAiBinaryAction = settingsMenu->addAction(QStringLiteral("Select AI Binary..."));
     selectAiBinaryAction->setStatusTip(QStringLiteral("Choose the AI command binary to launch"));
-    auto *startAiAction = aiMenu->addAction(QStringLiteral("Start AI"));
-    startAiAction->setStatusTip(QStringLiteral("Start the configured AI binary in a terminal"));
-    auto *currentAiBinaryAction = aiMenu->addAction(QStringLiteral("Binary: Not set"));
+    auto *currentAiBinaryAction = settingsMenu->addAction(QStringLiteral("AI Binary: Not set"));
     currentAiBinaryAction->setEnabled(false);
 
-    auto updateAiActions = [state, startAiAction, currentAiBinaryAction]() {
+    auto updateAiActions = [state, currentAiBinaryAction]() {
         const QFileInfo binaryInfo(state->aiBinaryPath);
-        const bool hasExecutableBinary = !state->aiBinaryPath.isEmpty()
-            && binaryInfo.exists()
-            && binaryInfo.isFile()
-            && binaryInfo.isExecutable();
-
-        startAiAction->setEnabled(hasExecutableBinary);
         currentAiBinaryAction->setText(
             state->aiBinaryPath.isEmpty()
-                ? QStringLiteral("Binary: Not set")
-                : QStringLiteral("Binary: %1").arg(QDir::toNativeSeparators(state->aiBinaryPath)));
+                ? QStringLiteral("AI Binary: Not set")
+                : QStringLiteral("AI Binary: %1").arg(QDir::toNativeSeparators(state->aiBinaryPath)));
         currentAiBinaryAction->setStatusTip(state->aiBinaryPath);
     };
 
-    connect(selectAiBinaryAction, &QAction::triggered, this, [this, state, updateAiActions]() {
+    connect(selectAiBinaryAction, &QAction::triggered, this, [this, state, updateAiActions, showStatusMessage]() {
         const QString startDirectory = QFileInfo(state->aiBinaryPath).exists()
                                            ? QFileInfo(state->aiBinaryPath).absolutePath()
                                            : QDir::homePath();
@@ -1630,19 +1661,16 @@ MainWindow::MainWindow(QWidget *parent)
 
         const QFileInfo binaryInfo(selectedBinary);
         if (!binaryInfo.exists() || !binaryInfo.isFile() || !binaryInfo.isExecutable()) {
-            QMessageBox::warning(
-                this,
-                QStringLiteral("AI binary is not executable"),
-                QStringLiteral("Choose an executable binary file."));
+            showStatusMessage(QStringLiteral("Choose an executable AI binary file"), 4000);
             return;
         }
 
         state->aiBinaryPath = binaryInfo.absoluteFilePath();
-        QSettings().setValue(settingsAiBinaryPathKey, state->aiBinaryPath);
+        AppSettings::saveAiBinaryPath(state->aiBinaryPath);
         updateAiActions();
     });
 
-    connect(startAiAction, &QAction::triggered, this, [this, state, createTerminal, aiSession, focusSession]() {
+    auto startAiTerminal = [this, state, createTerminal, aiSession, focusSession, showStatusMessage]() {
         if (TerminalSession *session = aiSession()) {
             focusSession(session);
             return;
@@ -1653,10 +1681,7 @@ MainWindow::MainWindow(QWidget *parent)
             || !binaryInfo.exists()
             || !binaryInfo.isFile()
             || !binaryInfo.isExecutable()) {
-            QMessageBox::warning(
-                this,
-                QStringLiteral("AI binary is not configured"),
-                QStringLiteral("Choose an executable AI binary first."));
+            showStatusMessage(QStringLiteral("Choose an executable AI binary first"), 4000);
             return;
         }
 
@@ -1667,7 +1692,7 @@ MainWindow::MainWindow(QWidget *parent)
                        false,
                        true,
                        true);
-    });
+    };
 
     updateAiActions();
 
@@ -1675,8 +1700,8 @@ MainWindow::MainWindow(QWidget *parent)
         createTerminal(host, QStringLiteral("/bin/bash"), QStringList{QStringLiteral("-lc"), sshLauncherScript(host, state->useScreen)});
     };
 
-    auto *hostsMenu = menuBar()->addMenu(QStringLiteral("Hosts"));
-    hostsMenu->menuAction()->setStatusTip(QStringLiteral("Open local and SSH terminal sessions"));
+    auto *terminalsMenu = menuBar()->addMenu(QStringLiteral("Terminals"));
+    terminalsMenu->menuAction()->setStatusTip(QStringLiteral("Open local, AI, and SSH terminal sessions"));
 
     auto addHostAction = [this, openHost](QMenu *menu, const QString &host) {
         auto *action = menu->addAction(host, this, [host, openHost]() {
@@ -1689,17 +1714,19 @@ MainWindow::MainWindow(QWidget *parent)
         return parts.join(QChar(0x1f));
     };
 
-    auto rebuildHostsMenu = [this, hostsMenu, createTerminal, openHost, addHostAction, menuPathKey]() {
-        hostsMenu->clear();
+    auto rebuildTerminalsMenu = [this, terminalsMenu, createTerminal, startAiTerminal, openHost, addHostAction, menuPathKey]() {
+        terminalsMenu->clear();
+
+        auto *startAiAction = terminalsMenu->addAction(QStringLiteral("AI Terminal"), this, startAiTerminal);
+        startAiAction->setStatusTip(QStringLiteral("Start or focus the configured AI terminal"));
+        auto *localMachineAction = terminalsMenu->addAction(QStringLiteral("Local Machine"), this, [createTerminal]() {
+            createTerminal(QStringLiteral("Local Machine"));
+        });
+        localMachineAction->setStatusTip(QStringLiteral("Open a local terminal"));
 
         const QList<SshHostEntry> hosts = readSshConfigHosts();
-        auto *localhostAction = hostsMenu->addAction(QStringLiteral("localhost"), this, [createTerminal]() {
-            createTerminal(QStringLiteral("localhost"));
-        });
-        localhostAction->setStatusTip(QStringLiteral("Open a local terminal"));
-
         if (!hosts.isEmpty()) {
-            hostsMenu->addSeparator();
+            terminalsMenu->addSeparator();
         }
 
         const QString rootPathKey;
@@ -1709,7 +1736,7 @@ MainWindow::MainWindow(QWidget *parent)
 
         for (const SshHostEntry &entry : hosts) {
             if (entry.groups.isEmpty()) {
-                addHostAction(hostsMenu, entry.host);
+                addHostAction(terminalsMenu, entry.host);
                 continue;
             }
 
@@ -1724,7 +1751,7 @@ MainWindow::MainWindow(QWidget *parent)
             }
 
             if (uniqueGroups.isEmpty()) {
-                addHostAction(hostsMenu, entry.host);
+                addHostAction(terminalsMenu, entry.host);
                 continue;
             }
 
@@ -1804,51 +1831,31 @@ MainWindow::MainWindow(QWidget *parent)
         QStringList topLevelGroups = childGroupsByPath.value(rootPathKey).values();
         topLevelGroups.sort(Qt::CaseInsensitive);
         for (const QString &group : topLevelGroups) {
-            addGroupMenuTree(hostsMenu, QStringList{group});
+            addGroupMenuTree(terminalsMenu, QStringList{group});
         }
     };
 
-    rebuildHostsMenu();
+    rebuildTerminalsMenu();
 
     auto *tasksMenu = menuBar()->addMenu(QStringLiteral("Tasks"));
     tasksMenu->menuAction()->setStatusTip(QStringLiteral("Run mterm tasks from the configured tasks directory"));
+    auto *selectTasksDirectoryAction = settingsMenu->addAction(QStringLiteral("Select Tasks Directory..."));
+    selectTasksDirectoryAction->setStatusTip(QStringLiteral("Choose the folder scanned for mterm task markdown files"));
+    auto *currentTasksDirectoryAction = settingsMenu->addAction(QStringLiteral("Tasks Directory: Not set"));
+    currentTasksDirectoryAction->setEnabled(false);
+
+    auto updateTasksDirectoryAction = [state, currentTasksDirectoryAction]() {
+        currentTasksDirectoryAction->setText(
+            state->tasksDirectory.isEmpty()
+                ? QStringLiteral("Tasks Directory: Not set")
+                : QStringLiteral("Tasks Directory: %1").arg(QDir::toNativeSeparators(state->tasksDirectory)));
+        currentTasksDirectoryAction->setStatusTip(state->tasksDirectory);
+    };
 
     auto rebuildTasksMenu = std::make_shared<std::function<void()>>();
     std::weak_ptr<std::function<void()>> rebuildTasksMenuWeak = rebuildTasksMenu;
     *rebuildTasksMenu = [this, state, tasksMenu, currentSession, rebuildTasksMenuWeak]() {
         tasksMenu->clear();
-
-        auto *selectTasksDirectoryAction = tasksMenu->addAction(QStringLiteral("Select Tasks Directory..."));
-        selectTasksDirectoryAction->setStatusTip(QStringLiteral("Choose the folder scanned for mterm task markdown files"));
-        if (const auto rebuildTasksMenu = rebuildTasksMenuWeak.lock()) {
-            connect(selectTasksDirectoryAction, &QAction::triggered, this, [this, state, rebuildTasksMenu]() {
-                const QString startDirectory = QDir(state->tasksDirectory).exists()
-                                                   ? state->tasksDirectory
-                                                   : QDir::homePath();
-                const QString selectedDirectory = QFileDialog::getExistingDirectory(
-                    this,
-                    QStringLiteral("Select Tasks Directory"),
-                    startDirectory);
-                if (selectedDirectory.isEmpty()) {
-                    return;
-                }
-
-                state->tasksDirectory = QDir(selectedDirectory).absolutePath();
-                QSettings().setValue(settingsTasksDirectoryKey, state->tasksDirectory);
-                (*rebuildTasksMenu)();
-            });
-        } else {
-            selectTasksDirectoryAction->setEnabled(false);
-            selectTasksDirectoryAction->setStatusTip(QStringLiteral("Tasks menu cannot be rebuilt"));
-        }
-
-        const QString currentDirectoryText = state->tasksDirectory.isEmpty()
-                                                 ? QStringLiteral("Directory: Not set")
-                                                 : QStringLiteral("Directory: %1").arg(QDir::toNativeSeparators(state->tasksDirectory));
-        auto *currentDirectoryAction = tasksMenu->addAction(currentDirectoryText);
-        currentDirectoryAction->setEnabled(false);
-        currentDirectoryAction->setStatusTip(state->tasksDirectory);
-        tasksMenu->addSeparator();
 
         if (state->tasksDirectory.isEmpty()) {
             auto *noDirectoryAction = tasksMenu->addAction(QStringLiteral("No tasks directory selected"));
@@ -1925,6 +1932,29 @@ MainWindow::MainWindow(QWidget *parent)
             });
         }
     };
+    if (const auto rebuildTasksMenuStrong = rebuildTasksMenuWeak.lock()) {
+        connect(selectTasksDirectoryAction, &QAction::triggered, this, [this, state, rebuildTasksMenuStrong, updateTasksDirectoryAction]() {
+            const QString startDirectory = QDir(state->tasksDirectory).exists()
+                                               ? state->tasksDirectory
+                                               : QDir::homePath();
+            const QString selectedDirectory = QFileDialog::getExistingDirectory(
+                this,
+                QStringLiteral("Select Tasks Directory"),
+                startDirectory);
+            if (selectedDirectory.isEmpty()) {
+                return;
+            }
+
+            state->tasksDirectory = QDir(selectedDirectory).absolutePath();
+            AppSettings::saveTasksDirectory(state->tasksDirectory);
+            updateTasksDirectoryAction();
+            (*rebuildTasksMenuStrong)();
+        });
+    } else {
+        selectTasksDirectoryAction->setEnabled(false);
+        selectTasksDirectoryAction->setStatusTip(QStringLiteral("Tasks menu cannot be rebuilt"));
+    }
+    updateTasksDirectoryAction();
     (*rebuildTasksMenu)();
 
     const QString sshConfigPath = QDir::home().filePath(QStringLiteral(".ssh/config"));
@@ -1946,9 +1976,9 @@ MainWindow::MainWindow(QWidget *parent)
     sshConfigReloadTimer->setSingleShot(true);
     sshConfigReloadTimer->setInterval(100);
 
-    connect(sshConfigReloadTimer, &QTimer::timeout, this, [rebuildHostsMenu, ensureSshConfigWatchPaths]() {
+    connect(sshConfigReloadTimer, &QTimer::timeout, this, [rebuildTerminalsMenu, ensureSshConfigWatchPaths]() {
         ensureSshConfigWatchPaths();
-        rebuildHostsMenu();
+        rebuildTerminalsMenu();
     });
     const auto scheduleSshConfigReload = [sshConfigReloadTimer]() {
         sshConfigReloadTimer->start();

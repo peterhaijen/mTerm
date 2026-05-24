@@ -11,8 +11,8 @@ Open a set of hosts, select the terminals that should receive input, and type on
 - Broadcast typed input from one terminal to all checked terminals.
 - Per-terminal broadcast checkbox.
 - `Alt` + `Shift` + click on a checkbox sets all checkboxes to the same state.
-- Open a local terminal from `Hosts -> localhost`.
-- Read marked SSH hosts from `~/.ssh/config` and add them to the `Hosts` menu.
+- Open a local terminal from `Terminals -> Local Machine`.
+- Read marked SSH hosts from `~/.ssh/config` and add them to the `Terminals` menu.
 - Mark a host for mTerm with a `# mTerm` comment.
 - Put one marked host in multiple menu groups with comments like:
 
@@ -23,18 +23,18 @@ Host otherHost
   User root
 ```
 
-This creates both `Hosts -> VPS -> otherHost` and `Hosts -> Webserver -> otherHost`. Each group also gets an `Open All` action.
+This creates both `Terminals -> VPS -> otherHost` and `Terminals -> Webserver -> otherHost`. Each group also gets an `Open All` action.
 
 - SSH host tabs run through a small shell wrapper: a successful SSH exit closes the tab immediately, and a failed SSH exit shows a 10-second countdown in the terminal. Press any key during the countdown to keep the tab open in a local shell.
-- Screen integration is off by default and can be enabled with `Terminal -> Use screen sessions`.
+- Screen integration is off by default and can be enabled with `Settings -> Use screen sessions`.
 - When enabled, local terminals attach to a `screen` session named `mterm` if `screen` is installed; otherwise they fall back to the default shell.
 - When enabled, SSH host tabs attach to a remote `screen` session named `mterm` if `screen` is installed on the remote host; otherwise they fall back to the remote login shell.
 - If the `mterm` screen session is already attached, new terminals use a normal shell instead of attaching a second time.
-- Choose the folder scanned for markdown task files with `Tasks -> Select Tasks Directory...`.
-- Choose an AI command binary with `AI -> Select AI Binary...` and start it with `AI -> Start AI`.
+- Choose the folder scanned for markdown task files with `Settings -> Select Tasks Directory...`.
+- Choose an AI command binary with `Settings -> Select AI Binary...` and start it with `Terminals -> AI Terminal`.
 - AI terminals never send or receive broadcast input.
 - mTerm allows only one AI terminal; starting AI again focuses the existing one.
-- Switch between tabbed view and tiled view with `View -> Tabs` and `View -> Tile All`.
+- Switch between tabbed view and tiled view with `Settings -> Layout -> Tabs` and `Settings -> Layout -> Tile All`.
 - The last selected view mode is saved and restored on startup.
 - Active terminal is highlighted in tiled view.
 - Terminal titles can update from detected shell prompts such as `user@host:~$`.
