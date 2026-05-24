@@ -18,6 +18,7 @@
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMap>
@@ -155,6 +156,13 @@ struct TaskFileEntry
 {
     QString title;
     QString path;
+};
+
+struct TaskParameterEntry
+{
+    QString placeholder;
+    QString label;
+    QString hint;
 };
 
 struct HelpPageEntry
@@ -442,6 +450,130 @@ static QList<TaskFileEntry> readVaultTaskFiles()
     });
 
     return entries;
+}
+
+static QList<TaskParameterEntry> readMarkdownTaskParameters(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return {};
+    }
+
+    QTextStream stream(&file);
+    if (stream.atEnd() || stream.readLine().trimmed() != QStringLiteral("---")) {
+        return {};
+    }
+
+    QList<TaskParameterEntry> parameters;
+    QSet<QString> seenPlaceholders;
+    static const QRegularExpression parameterRegex(QStringLiteral("^<([^>]+)>\\s*:\\s*(.*)$"));
+
+    while (!stream.atEnd()) {
+        const QString line = stream.readLine();
+        const QString trimmed = line.trimmed();
+
+        if (trimmed == QStringLiteral("---")) {
+            break;
+        }
+
+        const QRegularExpressionMatch match = parameterRegex.match(trimmed);
+        if (!match.hasMatch()) {
+            continue;
+        }
+
+        const QString label = match.captured(1).trimmed();
+        if (label.isEmpty()) {
+            continue;
+        }
+
+        const QString placeholder = QStringLiteral("<%1>").arg(label);
+        if (seenPlaceholders.contains(placeholder)) {
+            continue;
+        }
+
+        QString hint = normalizedYamlValue(match.captured(2));
+        const int commentIndex = hint.indexOf(QLatin1Char('#'));
+        if (commentIndex != -1) {
+            hint = normalizedYamlValue(hint.left(commentIndex));
+        }
+
+        seenPlaceholders.insert(placeholder);
+        parameters.append({placeholder, label, hint});
+    }
+
+    return parameters;
+}
+
+static bool promptTaskParameterValues(QWidget *parent,
+                                      const QList<TaskParameterEntry> &parameters,
+                                      QMap<QString, QString> *values)
+{
+    if (parameters.isEmpty()) {
+        return true;
+    }
+
+    QDialog dialog(parent);
+    dialog.setWindowTitle(QStringLiteral("Task Parameters"));
+
+    auto *dialogLayout = new QVBoxLayout(&dialog);
+    dialogLayout->setContentsMargins(16, 16, 16, 12);
+    dialogLayout->setSpacing(12);
+
+    auto *titleLabel = new QLabel(QStringLiteral("Enter task values"), &dialog);
+    titleLabel->setWordWrap(true);
+    dialogLayout->addWidget(titleLabel);
+
+    auto *fieldsLayout = new QGridLayout();
+    fieldsLayout->setColumnStretch(1, 1);
+    fieldsLayout->setHorizontalSpacing(12);
+    fieldsLayout->setVerticalSpacing(8);
+    dialogLayout->addLayout(fieldsLayout);
+
+    QVector<QLineEdit *> fields;
+    fields.reserve(parameters.size());
+
+    for (int i = 0; i < parameters.size(); ++i) {
+        const TaskParameterEntry &parameter = parameters.at(i);
+
+        auto *label = new QLabel(parameter.label, &dialog);
+        auto *field = new QLineEdit(&dialog);
+        field->setMinimumWidth(480);
+        field->setPlaceholderText(parameter.hint);
+        field->setClearButtonEnabled(true);
+        label->setBuddy(field);
+
+        fieldsLayout->addWidget(label, i, 0);
+        fieldsLayout->addWidget(field, i, 1);
+        fields.append(field);
+    }
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    dialogLayout->addWidget(buttons);
+
+    for (int i = 0; i < fields.size(); ++i) {
+        QLineEdit *field = fields.at(i);
+        QObject::connect(field, &QLineEdit::returnPressed, &dialog, [i, fields, &dialog]() {
+            if (i + 1 < fields.size()) {
+                fields.at(i + 1)->setFocus();
+                fields.at(i + 1)->selectAll();
+                return;
+            }
+            dialog.accept();
+        });
+    }
+
+    fields.first()->setFocus();
+    if (dialog.exec() != QDialog::Accepted) {
+        return false;
+    }
+
+    for (int i = 0; i < parameters.size(); ++i) {
+        values->insert(parameters.at(i).placeholder, fields.at(i)->text());
+    }
+
+    return true;
 }
 
 static QStringList readMarkdownCommandBlocks(const QString &path)
@@ -1301,7 +1433,7 @@ MainWindow::MainWindow(QWidget *parent)
             taskAction->setToolTip(taskFile.path);
             taskAction->setStatusTip(QStringLiteral("Run commands from %1").arg(taskFile.path));
             connect(taskAction, &QAction::triggered, this, [this, state, currentSession, taskFile]() {
-                const QStringList commandBlocks = readMarkdownCommandBlocks(taskFile.path);
+                QStringList commandBlocks = readMarkdownCommandBlocks(taskFile.path);
                 if (commandBlocks.isEmpty()) {
                     QMessageBox::warning(
                         this,
@@ -1317,6 +1449,20 @@ MainWindow::MainWindow(QWidget *parent)
                         QStringLiteral("No active terminal"),
                         QStringLiteral("Open or focus a terminal before running a task."));
                     return;
+                }
+
+                const QList<TaskParameterEntry> parameters = readMarkdownTaskParameters(taskFile.path);
+                QMap<QString, QString> parameterValues;
+                if (!promptTaskParameterValues(this, parameters, &parameterValues)) {
+                    return;
+                }
+
+                if (!parameterValues.isEmpty()) {
+                    for (QString &commandBlock : commandBlocks) {
+                        for (auto iterator = parameterValues.constBegin(); iterator != parameterValues.constEnd(); ++iterator) {
+                            commandBlock.replace(iterator.key(), iterator.value());
+                        }
+                    }
                 }
 
                 QList<TerminalSession *> targetSessions{activeSession};

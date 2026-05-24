@@ -11,18 +11,19 @@
 <li>Without <code>description</code>, mTerm uses the filename without <code>.md</code>.</li>
 <li>Commands are read only from fenced <code>bash</code> code blocks and sent to the active terminal.</li>
 <li>If more than one terminal has broadcast enabled, the task is sent to those terminals too.</li>
+<li>Frontmatter properties named like <code>&lt;remote_branch&gt;</code> prompt for a value before the task runs.</li>
+<li>The property value is shown as the field hint, and entered values replace matching placeholders in the bash commands.</li>
 </ul>
 <p><b>Example</b></p>
 <pre style="background:#f4f4f4; padding:8px; border:1px solid #d0d0d0;">---
 tags:
   - mterm
-description: Update, upgrade en autoremove
+description: Delete a branch on the default remote
+&lt;remote_branch&gt;: The remote branch to delete
 ---
 
 ```bash
-sudo apt update
-sudo apt upgrade
-sudo apt autoremove
+git push origin --delete &lt;remote_branch&gt;
 ```</pre>
 </body>
 </html>
