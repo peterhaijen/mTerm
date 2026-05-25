@@ -6,6 +6,7 @@
 #include <QClipboard>
 #include <QColor>
 #include <QCoreApplication>
+#include <QByteArray>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -957,29 +958,17 @@ static QString taskInjectionText(const QStringList &commandBlocks,
                                  const QMap<QString, QString> &environmentValues)
 {
     const QString commands = commandBlocks.join(QStringLiteral("\n\n"));
-    QString delimiter = QStringLiteral("MTERM_TASK_EOF");
-    int suffix = 1;
-    while (commands.split(QLatin1Char('\n')).contains(delimiter)) {
-        delimiter = QStringLiteral("MTERM_TASK_EOF_%1").arg(suffix++);
-    }
+    const QString encodedCommands = QString::fromLatin1(commands.toUtf8().toBase64());
 
     QString injection;
     QTextStream stream(&injection);
-    stream << "mterm_task=$(mktemp) || exit\n";
-    stream << "cat > \"$mterm_task\" <<'" << delimiter << "'\n";
-    stream << "trap 'rm -f \"$0\"' EXIT\n";
-    stream << commands;
-    if (!commands.endsWith(QLatin1Char('\n'))) {
-        stream << "\n";
-    }
-    stream << "mterm_status=$?\n";
-    stream << "printf '\\nmTerm task exited with status %s\\n' \"$mterm_status\"\n";
-    stream << "exit \"$mterm_status\"\n";
-    stream << delimiter << "\n";
+    stream << "mterm_task=$(mktemp) || exit; ";
+    stream << "printf %s " << shellSingleQuoted(encodedCommands) << " | base64 -d > \"$mterm_task\" || { rm -f \"$mterm_task\"; exit; }; ";
     for (auto iterator = environmentValues.constBegin(); iterator != environmentValues.constEnd(); ++iterator) {
-        stream << "export " << iterator.key() << "=" << shellSingleQuoted(iterator.value()) << "\n";
+        stream << iterator.key() << "=" << shellSingleQuoted(iterator.value()) << " ";
     }
-    stream << "bash \"$mterm_task\"\n";
+    stream << "bash \"$mterm_task\"; ";
+    stream << "rm -f \"$mterm_task\";\n";
 
     return injection;
 }
