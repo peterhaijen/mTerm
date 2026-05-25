@@ -11,19 +11,25 @@
 <li>Without <code>description</code>, mTerm uses the filename without <code>.md</code>.</li>
 <li>Commands are read only from fenced <code>bash</code> code blocks and sent to the active terminal.</li>
 <li>If more than one terminal has broadcast enabled, the task is sent to those terminals too.</li>
-<li>Frontmatter properties named like <code>&lt;remote_branch&gt;</code> prompt for a value before the task runs.</li>
-<li>The property value is shown as the field hint, and entered values replace matching placeholders in the bash commands.</li>
+<li>Frontmatter properties named like <code>&lt;name&gt;</code> prompt for a value before the task runs and export shell variable <code>name</code>.</li>
+<li>Use shell variables in commands, for example <code>$name</code> or <code>${name:-default}</code>.</li>
+<li>Use <code>&lt;name:-default&gt;</code> in frontmatter to set a default value for exported variable <code>name</code>.</li>
+<li>Use <code>&lt;name:?message&gt;</code> to require a value and show <code>message</code> while it is empty.</li>
 </ul>
 <p><b>Example</b></p>
 <pre style="background:#f4f4f4; padding:8px; border:1px solid #d0d0d0;">---
 tags:
   - mterm
-description: Delete a branch on the default remote
-&lt;remote_branch&gt;: The remote branch to delete
+description: Deploy branch
+&lt;remote_branch:?Remote branch is required&gt;: The remote branch to deploy
+&lt;remote:-origin&gt;: Remote name
+&lt;flags&gt;: Optional extra flags
+&lt;environment&gt;: Optional environment
 ---
 
 ```bash
-git push origin --delete &lt;remote_branch&gt;
+git push "$remote" "$remote_branch" $flags
+./deploy "${environment:-staging}"
 ```</pre>
 </body>
 </html>

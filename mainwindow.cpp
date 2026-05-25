@@ -30,6 +30,7 @@
 #include <QMouseEvent>
 #include <QProcess>
 #include <QPixmap>
+#include <QPushButton>
 #include <QRect>
 #include <QRegularExpression>
 #include <QScreen>
@@ -386,9 +387,21 @@ struct TaskFileEntry
 
 struct TaskParameterEntry
 {
-    QString placeholder;
     QString label;
     QString hint;
+    QString defaultValue;
+    bool hasDefault = false;
+    QString requiredMessage;
+    bool isRequired = false;
+};
+
+struct TaskParameterExpression
+{
+    QString label;
+    QString fallbackValue;
+    bool hasFallback = false;
+    QString requiredMessage;
+    bool isRequired = false;
 };
 
 struct HelpPageEntry
@@ -677,6 +690,10 @@ static QList<TaskFileEntry> readTaskFiles(const QString &tasksDirectoryPath)
     return entries;
 }
 
+static bool parseTaskParameterExpression(const QString &expression, TaskParameterExpression *parameterExpression);
+static bool isValidShellVariableName(const QString &name);
+static QString shellSingleQuoted(const QString &value);
+
 static QList<TaskParameterEntry> readMarkdownTaskParameters(const QString &path)
 {
     QFile file(path);
@@ -706,13 +723,18 @@ static QList<TaskParameterEntry> readMarkdownTaskParameters(const QString &path)
             continue;
         }
 
-        const QString label = match.captured(1).trimmed();
-        if (label.isEmpty()) {
+        const QString expression = match.captured(1).trimmed();
+        TaskParameterExpression parameterExpression;
+        if (!parseTaskParameterExpression(expression, &parameterExpression)) {
             continue;
         }
 
-        const QString placeholder = QStringLiteral("<%1>").arg(label);
-        if (seenPlaceholders.contains(placeholder)) {
+        const QString label = parameterExpression.label;
+        if (label.isEmpty() || !isValidShellVariableName(label)) {
+            continue;
+        }
+
+        if (seenPlaceholders.contains(label)) {
             continue;
         }
 
@@ -722,11 +744,63 @@ static QList<TaskParameterEntry> readMarkdownTaskParameters(const QString &path)
             hint = normalizedYamlValue(hint.left(commentIndex));
         }
 
-        seenPlaceholders.insert(placeholder);
-        parameters.append({placeholder, label, hint});
+        seenPlaceholders.insert(label);
+        parameters.append({label,
+                           hint,
+                           parameterExpression.fallbackValue,
+                           parameterExpression.hasFallback,
+                           parameterExpression.requiredMessage,
+                           parameterExpression.isRequired});
     }
 
     return parameters;
+}
+
+static bool parseTaskParameterExpression(const QString &expression, TaskParameterExpression *parameterExpression)
+{
+    static const QRegularExpression expressionRegex(QStringLiteral("^([^:]+)(?::([-?])(.*))?$"));
+    const QRegularExpressionMatch match = expressionRegex.match(expression.trimmed());
+    if (!match.hasMatch()) {
+        return false;
+    }
+
+    const QString label = match.captured(1).trimmed();
+    if (label.isEmpty()) {
+        return false;
+    }
+
+    parameterExpression->label = label;
+    parameterExpression->fallbackValue.clear();
+    parameterExpression->hasFallback = false;
+    parameterExpression->requiredMessage.clear();
+    parameterExpression->isRequired = false;
+
+    if (match.capturedLength(2) > 0) {
+        const QString operatorMarker = match.captured(2);
+        const QString operatorValue = match.captured(3);
+        if (operatorMarker == QStringLiteral("-")) {
+            parameterExpression->fallbackValue = operatorValue;
+            parameterExpression->hasFallback = true;
+        } else if (operatorMarker == QStringLiteral("?")) {
+            parameterExpression->requiredMessage = operatorValue;
+            parameterExpression->isRequired = true;
+        }
+    }
+
+    return true;
+}
+
+static bool isValidShellVariableName(const QString &name)
+{
+    static const QRegularExpression shellVariableNameRegex(QStringLiteral("^[A-Za-z_][A-Za-z0-9_]*$"));
+    return shellVariableNameRegex.match(name).hasMatch();
+}
+
+static QString shellSingleQuoted(const QString &value)
+{
+    QString escaped = value;
+    escaped.replace(QStringLiteral("'"), QStringLiteral("'\\''"));
+    return QStringLiteral("'") + escaped + QStringLiteral("'");
 }
 
 static bool promptTaskParameterValues(QWidget *parent,
@@ -764,6 +838,9 @@ static bool promptTaskParameterValues(QWidget *parent,
         auto *field = new QLineEdit(&dialog);
         field->setMinimumWidth(480);
         field->setPlaceholderText(parameter.hint);
+        if (parameter.isRequired && !parameter.requiredMessage.isEmpty()) {
+            field->setToolTip(parameter.requiredMessage);
+        }
         field->setClearButtonEnabled(true);
         label->setBuddy(field);
 
@@ -773,29 +850,65 @@ static bool promptTaskParameterValues(QWidget *parent,
     }
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     dialogLayout->addWidget(buttons);
 
+    auto requiredValuesPresent = [&fields, &parameters]() {
+        for (int i = 0; i < parameters.size(); ++i) {
+            const TaskParameterEntry &parameter = parameters.at(i);
+            if (parameter.isRequired && fields.at(i)->text().trimmed().isEmpty()) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    auto updateOkButton = [buttons, requiredValuesPresent]() {
+        const bool enabled = requiredValuesPresent();
+        buttons->button(QDialogButtonBox::Ok)->setEnabled(enabled);
+        buttons->button(QDialogButtonBox::Ok)->setToolTip(
+            enabled ? QString() : QStringLiteral("Fill in required values first."));
+    };
+
+    auto validateAndAccept = [&dialog, requiredValuesPresent]() {
+        if (requiredValuesPresent()) {
+            dialog.accept();
+        }
+    };
+
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, validateAndAccept);
+
     for (int i = 0; i < fields.size(); ++i) {
         QLineEdit *field = fields.at(i);
-        QObject::connect(field, &QLineEdit::returnPressed, &dialog, [i, fields, &dialog]() {
+        QObject::connect(field, &QLineEdit::textChanged, &dialog, updateOkButton);
+        QObject::connect(field, &QLineEdit::returnPressed, &dialog, [i, fields, validateAndAccept]() {
             if (i + 1 < fields.size()) {
                 fields.at(i + 1)->setFocus();
                 fields.at(i + 1)->selectAll();
                 return;
             }
-            dialog.accept();
+            validateAndAccept();
         });
     }
 
+    updateOkButton();
     fields.first()->setFocus();
     if (dialog.exec() != QDialog::Accepted) {
         return false;
     }
 
     for (int i = 0; i < parameters.size(); ++i) {
-        values->insert(parameters.at(i).placeholder, fields.at(i)->text());
+        const TaskParameterEntry &parameter = parameters.at(i);
+        QString value = fields.at(i)->text();
+        if (value.trimmed().isEmpty()) {
+            value.clear();
+        }
+
+        if (value.isEmpty() && parameter.hasDefault) {
+            value = parameter.defaultValue;
+        }
+
+        values->insert(parameter.label, value);
     }
 
     return true;
@@ -840,7 +953,8 @@ static QStringList readMarkdownCommandBlocks(const QString &path)
     return commandBlocks;
 }
 
-static QString taskInjectionText(const QStringList &commandBlocks)
+static QString taskInjectionText(const QStringList &commandBlocks,
+                                 const QMap<QString, QString> &environmentValues)
 {
     const QString commands = commandBlocks.join(QStringLiteral("\n\n"));
     QString delimiter = QStringLiteral("MTERM_TASK_EOF");
@@ -862,6 +976,9 @@ static QString taskInjectionText(const QStringList &commandBlocks)
     stream << "printf '\\nmTerm task exited with status %s\\n' \"$mterm_status\"\n";
     stream << "exit \"$mterm_status\"\n";
     stream << delimiter << "\n";
+    for (auto iterator = environmentValues.constBegin(); iterator != environmentValues.constEnd(); ++iterator) {
+        stream << "export " << iterator.key() << "=" << shellSingleQuoted(iterator.value()) << "\n";
+    }
     stream << "bash \"$mterm_task\"\n";
 
     return injection;
@@ -1968,14 +2085,6 @@ MainWindow::MainWindow(QWidget *parent)
                     return;
                 }
 
-                if (!parameterValues.isEmpty()) {
-                    for (QString &commandBlock : commandBlocks) {
-                        for (auto iterator = parameterValues.constBegin(); iterator != parameterValues.constEnd(); ++iterator) {
-                            commandBlock.replace(iterator.key(), iterator.value());
-                        }
-                    }
-                }
-
                 QList<TerminalSession *> targetSessions{activeSession};
                 QList<TerminalSession *> checkedSessions;
                 for (TerminalSession *session : state->sessions) {
@@ -1992,7 +2101,7 @@ MainWindow::MainWindow(QWidget *parent)
                     }
                 }
 
-                const QString commands = taskInjectionText(commandBlocks);
+                const QString commands = taskInjectionText(commandBlocks, parameterValues);
                 for (TerminalSession *session : targetSessions) {
                     session->terminal->sendText(commands);
                 }
