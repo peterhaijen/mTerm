@@ -6,7 +6,6 @@
 #include <QClipboard>
 #include <QColor>
 #include <QCoreApplication>
-#include <QByteArray>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -957,13 +956,22 @@ static QStringList readMarkdownCommandBlocks(const QString &path)
 static QString taskInjectionText(const QStringList &commandBlocks,
                                  const QMap<QString, QString> &environmentValues)
 {
-    const QString commands = commandBlocks.join(QStringLiteral("\n\n"));
-    const QString encodedCommands = QString::fromLatin1(commands.toUtf8().toBase64());
-
     QString injection;
     QTextStream stream(&injection);
     stream << "mterm_task=$(mktemp) || exit; ";
-    stream << "printf %s " << shellSingleQuoted(encodedCommands) << " | base64 -d > \"$mterm_task\" || { rm -f \"$mterm_task\"; exit; }; ";
+    stream << "printf '' > \"$mterm_task\" || { rm -f \"$mterm_task\"; exit; }; ";
+
+    for (int blockIndex = 0; blockIndex < commandBlocks.size(); ++blockIndex) {
+        const QStringList lines = commandBlocks.at(blockIndex).split(QLatin1Char('\n'));
+        for (const QString &line : lines) {
+            stream << "printf '%s\\n' " << shellSingleQuoted(line) << " >> \"$mterm_task\"; ";
+        }
+
+        if (blockIndex + 1 < commandBlocks.size()) {
+            stream << "printf '\\n' >> \"$mterm_task\"; ";
+        }
+    }
+
     for (auto iterator = environmentValues.constBegin(); iterator != environmentValues.constEnd(); ++iterator) {
         stream << iterator.key() << "=" << shellSingleQuoted(iterator.value()) << " ";
     }
