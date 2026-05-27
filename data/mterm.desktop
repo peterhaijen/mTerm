@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=mTerm
+GenericName=Terminal Manager
+Comment=Qt terminal manager for local and SSH sessions
+Exec=mTerm
+Icon=mterm
+Terminal=false
+Categories=System;TerminalEmulator;Network;Qt;
+Keywords=terminal;ssh;shell;broadcast;

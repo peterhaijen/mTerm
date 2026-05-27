@@ -2,6 +2,8 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QGuiApplication>
+#include <QIcon>
 #include <QLocale>
 #include <QTranslator>
 
@@ -10,6 +12,9 @@ int main(int argc, char *argv[])
     QApplication a(argc, argv);
     QCoreApplication::setOrganizationName(QStringLiteral("mTerm"));
     QCoreApplication::setApplicationName(QStringLiteral("mTerm"));
+    QGuiApplication::setDesktopFileName(QStringLiteral("mterm"));
+    a.setWindowIcon(QIcon::fromTheme(QStringLiteral("mterm"),
+                                     QIcon(QStringLiteral(":/icons/mterm.svg"))));
 
     QTranslator translator;
     const QStringList uiLanguages = QLocale::system().uiLanguages();

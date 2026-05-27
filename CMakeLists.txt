@@ -91,6 +91,12 @@ install(TARGETS mTerm
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+install(FILES data/mterm.desktop
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
+)
+install(FILES assets/mterm.svg
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
+)
 
 if(QT_VERSION_MAJOR EQUAL 6)
     qt_finalize_executable(mTerm)

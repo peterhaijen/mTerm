@@ -42,8 +42,13 @@ deb: release
 	arch=$$(dpkg --print-architecture); \
 	stage="$(DEB_BUILD_DIR)/mterm"; \
 	rm -rf "$$stage"; \
-	mkdir -p "$$stage/DEBIAN" "$$stage/usr/bin" "$(DEB_OUTPUT_DIR)"; \
+	mkdir -p "$$stage/DEBIAN" "$$stage/usr/bin" \
+		"$$stage/usr/share/applications" \
+		"$$stage/usr/share/icons/hicolor/scalable/apps" \
+		"$(DEB_OUTPUT_DIR)"; \
 	cp "$(BUILD_DIR)/mTerm" "$$stage/usr/bin/mTerm"; \
+	cp data/mterm.desktop "$$stage/usr/share/applications/mterm.desktop"; \
+	cp assets/mterm.svg "$$stage/usr/share/icons/hicolor/scalable/apps/mterm.svg"; \
 	chmod 0755 "$$stage/usr/bin/mTerm"; \
 	write_control() { \
 		{ \

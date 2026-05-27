@@ -5,4 +5,7 @@
         <file alias="03-adding-tasks.html">help/03-adding-tasks.html</file>
         <file alias="04-shortcuts.html">help/04-shortcuts.html</file>
     </qresource>
+    <qresource prefix="/icons">
+        <file alias="mterm.svg">assets/mterm.svg</file>
+    </qresource>
 </RCC>
