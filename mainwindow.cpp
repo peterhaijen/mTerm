@@ -58,6 +58,7 @@
 #include <cerrno>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <signal.h>
 #include <utility>
 
@@ -65,7 +66,7 @@ struct TerminalSession
 {
     QTermWidget *terminal = nullptr;
     QString title;
-    bool broadcastEnabled = true;
+    bool broadcastEnabled = false;
     bool broadcastLocked = false;
     bool isAiTerminal = false;
     bool hasFocus = false;
@@ -81,6 +82,7 @@ struct TerminalUiState
     QList<TerminalSession *> sessions;
     ViewMode viewMode = ViewMode::Tile;
     bool useScreen = false;
+    bool broadcastByDefault = false;
     QString tasksDirectory;
     QString aiBinaryPath;
     std::function<void()> renderCurrentView;
@@ -96,6 +98,7 @@ static constexpr auto viewModeKey = "ui/viewMode";
 static constexpr auto viewModeTabs = "tabs";
 static constexpr auto viewModeTile = "tile";
 static constexpr auto useScreenKey = "terminal/useScreen";
+static constexpr auto broadcastByDefaultKey = "terminal/broadcastByDefault";
 static constexpr auto tasksDirectoryKey = "tasks/directory";
 static constexpr auto aiBinaryPathKey = "ai/binaryPath";
 
@@ -133,6 +136,16 @@ static bool loadUseScreen()
 static void saveUseScreen(bool useScreen)
 {
     QSettings().setValue(useScreenKey, useScreen);
+}
+
+static bool loadBroadcastByDefault()
+{
+    return QSettings().value(broadcastByDefaultKey, false).toBool();
+}
+
+static void saveBroadcastByDefault(bool broadcastByDefault)
+{
+    QSettings().setValue(broadcastByDefaultKey, broadcastByDefault);
 }
 
 static QString loadTasksDirectory()
@@ -1255,6 +1268,7 @@ MainWindow::MainWindow(QWidget *parent)
     auto *state = new TerminalUiState;
     state->viewMode = AppSettings::loadViewMode();
     state->useScreen = AppSettings::loadUseScreen();
+    state->broadcastByDefault = AppSettings::loadBroadcastByDefault();
     state->tasksDirectory = AppSettings::loadTasksDirectory();
     state->aiBinaryPath = AppSettings::loadAiBinaryPath();
     qApp->installEventFilter(new TerminalFocusFilter(state, this));
@@ -1682,7 +1696,7 @@ MainWindow::MainWindow(QWidget *parent)
                               const QString &program = QString(),
                               const QStringList &args = QStringList(),
                               bool persistentProcess = false,
-                              bool initialBroadcastEnabled = true,
+                              std::optional<bool> initialBroadcastEnabled = std::nullopt,
                               bool broadcastLocked = false,
                               bool isAiTerminal = false) {
         QString terminalProgram = program;
@@ -1698,10 +1712,11 @@ MainWindow::MainWindow(QWidget *parent)
 
         const bool useCustomProgram = !terminalProgram.isEmpty();
         auto *terminal = new QTermWidget(useCustomProgram ? 0 : 1, this);
+        const bool effectiveInitialBroadcastEnabled = initialBroadcastEnabled.value_or(state->broadcastByDefault);
         auto *session = new TerminalSession{
             terminal,
             tabName,
-            broadcastLocked ? false : initialBroadcastEnabled,
+            broadcastLocked ? false : effectiveInitialBroadcastEnabled,
             broadcastLocked,
             isAiTerminal,
             true,
@@ -1779,28 +1794,12 @@ MainWindow::MainWindow(QWidget *parent)
     auto *settingsMenu = menuBar()->addMenu(QStringLiteral("Settings"));
     settingsMenu->menuAction()->setStatusTip(QStringLiteral("Configure mTerm"));
 
-    auto *layoutSettingsMenu = settingsMenu->addMenu(QStringLiteral("Layout"));
-    auto *tabsViewAction = layoutSettingsMenu->addAction(QStringLiteral("Tabs"));
-    tabsViewAction->setCheckable(true);
-    tabsViewAction->setChecked(state->viewMode == ViewMode::Tabs);
-    tabsViewAction->setStatusTip(QStringLiteral("Show one terminal per tab"));
-    auto *tileViewAction = layoutSettingsMenu->addAction(QStringLiteral("Tile All"));
-    tileViewAction->setCheckable(true);
-    tileViewAction->setChecked(state->viewMode == ViewMode::Tile);
-    tileViewAction->setStatusTip(QStringLiteral("Show all terminals in a tiled layout"));
-
-    connect(tabsViewAction, &QAction::triggered, this, [state, tabsViewAction, tileViewAction]() {
-        state->viewMode = ViewMode::Tabs;
-        tabsViewAction->setChecked(true);
-        tileViewAction->setChecked(false);
-        AppSettings::saveViewMode(state->viewMode);
-        state->renderCurrentView();
-    });
-
-    connect(tileViewAction, &QAction::triggered, this, [state, tabsViewAction, tileViewAction]() {
-        state->viewMode = ViewMode::Tile;
-        tabsViewAction->setChecked(false);
-        tileViewAction->setChecked(true);
+    auto *useTiledLayoutAction = settingsMenu->addAction(QStringLiteral("Use tiled layout"));
+    useTiledLayoutAction->setCheckable(true);
+    useTiledLayoutAction->setChecked(state->viewMode == ViewMode::Tile);
+    useTiledLayoutAction->setStatusTip(QStringLiteral("Show all terminals in a tiled layout instead of tabs"));
+    connect(useTiledLayoutAction, &QAction::toggled, this, [state](bool checked) {
+        state->viewMode = checked ? ViewMode::Tile : ViewMode::Tabs;
         AppSettings::saveViewMode(state->viewMode);
         state->renderCurrentView();
     });
@@ -1812,6 +1811,15 @@ MainWindow::MainWindow(QWidget *parent)
     connect(useScreenAction, &QAction::toggled, this, [state](bool checked) {
         state->useScreen = checked;
         AppSettings::saveUseScreen(checked);
+    });
+
+    auto *broadcastByDefaultAction = settingsMenu->addAction(QStringLiteral("Use broadcast by default"));
+    broadcastByDefaultAction->setCheckable(true);
+    broadcastByDefaultAction->setChecked(state->broadcastByDefault);
+    broadcastByDefaultAction->setStatusTip(QStringLiteral("Enable broadcast checkboxes for newly opened terminals"));
+    connect(broadcastByDefaultAction, &QAction::toggled, this, [state](bool checked) {
+        state->broadcastByDefault = checked;
+        AppSettings::saveBroadcastByDefault(checked);
     });
 
     auto *selectAiBinaryAction = settingsMenu->addAction(QStringLiteral("Select AI Binary..."));

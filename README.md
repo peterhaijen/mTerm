@@ -10,6 +10,8 @@ Open a set of hosts, select the terminals that should receive input, and type on
 
 - Broadcast typed input from one terminal to all checked terminals.
 - Per-terminal broadcast checkbox.
+- Broadcast is disabled for new terminals by default.
+- Enable `Settings -> Use broadcast by default` to check broadcast for newly opened terminals.
 - `Alt` + `Shift` + click on a checkbox sets all checkboxes to the same state.
 - Open a local terminal from `Terminals -> Local Machine`.
 - Read marked SSH hosts from `~/.ssh/config` and add them to the `Terminals` menu.
@@ -27,6 +29,7 @@ This creates both `Terminals -> VPS -> otherHost` and `Terminals -> Webserver ->
 
 - SSH host tabs run through a small shell wrapper: a successful SSH exit closes the tab immediately, and a failed SSH exit shows a 10-second countdown in the terminal. Press any key during the countdown to keep the tab open in a local shell.
 - Screen integration is off by default and can be enabled with `Settings -> Use screen sessions`.
+- Broadcast can be enabled by default for new terminals with `Settings -> Use broadcast by default`.
 - When enabled, local terminals attach to a `screen` session named `mterm` if `screen` is installed; otherwise they fall back to the default shell.
 - When enabled, SSH host tabs attach to a remote `screen` session named `mterm` if `screen` is installed on the remote host; otherwise they fall back to the remote login shell.
 - If the `mterm` screen session is already attached, new terminals use a normal shell instead of attaching a second time.
@@ -34,7 +37,7 @@ This creates both `Terminals -> VPS -> otherHost` and `Terminals -> Webserver ->
 - Choose an AI command binary with `Settings -> Select AI Binary...` and start it with `Terminals -> AI Terminal`.
 - AI terminals never send or receive broadcast input.
 - mTerm allows only one AI terminal; starting AI again focuses the existing one.
-- Switch between tabbed view and tiled view with `Settings -> Layout -> Tabs` and `Settings -> Layout -> Tile All`.
+- Switch between tabbed view and tiled view with `Settings -> Use tiled layout`.
 - The last selected view mode is saved and restored on startup.
 - Active terminal is highlighted in tiled view.
 - Terminal titles can update from detected shell prompts such as `user@host:~$`.
@@ -96,3 +99,4 @@ Packages are written to `build/packages` and include an OS-specific version suff
 - SSH hosts are only added to the menu when their host block contains a `# mTerm` marker.
 - Host grouping is read from `# mTerm Groups <group> [group...]` comments inside a marked host block.
 - Broadcast is controlled by the checkbox shown next to each terminal title.
+- New terminals start with broadcast unchecked unless `Settings -> Use broadcast by default` is enabled.
