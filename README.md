@@ -55,6 +55,7 @@ This creates both `Terminals -> VPS -> otherHost` and `Terminals -> Webserver ->
 - `Ctrl+Shift++`: increase terminal font size.
 - `Ctrl+-`: decrease terminal font size.
 - `Ctrl+0`: reset terminal font size.
+- `Alt+F`, `Alt+S`, `Alt+T`, `Alt+K`, `Alt+H`: open File, Settings, Terminals, Tasks, and Help menus.
 
 The same list is available in the app via `Help -> Shortcuts`.
 

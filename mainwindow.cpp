@@ -1786,15 +1786,15 @@ MainWindow::MainWindow(QWidget *parent)
         return terminal;
     };
 
-    auto *fileMenu = menuBar()->addMenu(QStringLiteral("File"));
+    auto *fileMenu = menuBar()->addMenu(QStringLiteral("&File"));
     fileMenu->menuAction()->setStatusTip(QStringLiteral("Application actions"));
-    auto *exitAction = fileMenu->addAction(QStringLiteral("Exit"), this, &QWidget::close);
+    auto *exitAction = fileMenu->addAction(QStringLiteral("E&xit"), this, &QWidget::close);
     exitAction->setStatusTip(QStringLiteral("Close mTerm"));
 
-    auto *settingsMenu = menuBar()->addMenu(QStringLiteral("Settings"));
+    auto *settingsMenu = menuBar()->addMenu(QStringLiteral("&Settings"));
     settingsMenu->menuAction()->setStatusTip(QStringLiteral("Configure mTerm"));
 
-    auto *useTiledLayoutAction = settingsMenu->addAction(QStringLiteral("Use tiled layout"));
+    auto *useTiledLayoutAction = settingsMenu->addAction(QStringLiteral("Use &tiled layout"));
     useTiledLayoutAction->setCheckable(true);
     useTiledLayoutAction->setChecked(state->viewMode == ViewMode::Tile);
     useTiledLayoutAction->setStatusTip(QStringLiteral("Show all terminals in a tiled layout instead of tabs"));
@@ -1804,7 +1804,7 @@ MainWindow::MainWindow(QWidget *parent)
         state->renderCurrentView();
     });
 
-    auto *useScreenAction = settingsMenu->addAction(QStringLiteral("Use screen sessions"));
+    auto *useScreenAction = settingsMenu->addAction(QStringLiteral("Use &screen sessions"));
     useScreenAction->setCheckable(true);
     useScreenAction->setChecked(state->useScreen);
     useScreenAction->setStatusTip(QStringLiteral("Use screen sessions for new local and SSH terminals"));
@@ -1813,7 +1813,7 @@ MainWindow::MainWindow(QWidget *parent)
         AppSettings::saveUseScreen(checked);
     });
 
-    auto *broadcastByDefaultAction = settingsMenu->addAction(QStringLiteral("Use broadcast by default"));
+    auto *broadcastByDefaultAction = settingsMenu->addAction(QStringLiteral("Use &broadcast by default"));
     broadcastByDefaultAction->setCheckable(true);
     broadcastByDefaultAction->setChecked(state->broadcastByDefault);
     broadcastByDefaultAction->setStatusTip(QStringLiteral("Enable broadcast checkboxes for newly opened terminals"));
@@ -1822,7 +1822,7 @@ MainWindow::MainWindow(QWidget *parent)
         AppSettings::saveBroadcastByDefault(checked);
     });
 
-    auto *selectAiBinaryAction = settingsMenu->addAction(QStringLiteral("Select AI Binary..."));
+    auto *selectAiBinaryAction = settingsMenu->addAction(QStringLiteral("Select &AI Binary..."));
     selectAiBinaryAction->setStatusTip(QStringLiteral("Choose the AI command binary to launch"));
     auto *currentAiBinaryAction = settingsMenu->addAction(QStringLiteral("AI Binary: Not set"));
     currentAiBinaryAction->setEnabled(false);
@@ -1889,7 +1889,7 @@ MainWindow::MainWindow(QWidget *parent)
         createTerminal(host, QStringLiteral("/bin/bash"), QStringList{QStringLiteral("-lc"), sshLauncherScript(host, state->useScreen)});
     };
 
-    auto *terminalsMenu = menuBar()->addMenu(QStringLiteral("Terminals"));
+    auto *terminalsMenu = menuBar()->addMenu(QStringLiteral("&Terminals"));
     terminalsMenu->menuAction()->setStatusTip(QStringLiteral("Open local, AI, and SSH terminal sessions"));
 
     auto addHostAction = [this, openHost](QMenu *menu, const QString &host) {
@@ -1906,9 +1906,9 @@ MainWindow::MainWindow(QWidget *parent)
     auto rebuildTerminalsMenu = [this, terminalsMenu, createTerminal, startAiTerminal, openHost, addHostAction, menuPathKey]() {
         terminalsMenu->clear();
 
-        auto *startAiAction = terminalsMenu->addAction(QStringLiteral("AI Terminal"), this, startAiTerminal);
+        auto *startAiAction = terminalsMenu->addAction(QStringLiteral("&AI Terminal"), this, startAiTerminal);
         startAiAction->setStatusTip(QStringLiteral("Start or focus the configured AI terminal"));
-        auto *localMachineAction = terminalsMenu->addAction(QStringLiteral("Local Machine"), this, [createTerminal]() {
+        auto *localMachineAction = terminalsMenu->addAction(QStringLiteral("&Local Machine"), this, [createTerminal]() {
             createTerminal(QStringLiteral("Local Machine"));
         });
         localMachineAction->setStatusTip(QStringLiteral("Open a local terminal"));
@@ -1994,7 +1994,7 @@ MainWindow::MainWindow(QWidget *parent)
 
             QStringList openAllHosts = hostsByPath.value(key).values();
             openAllHosts.sort(Qt::CaseInsensitive);
-            auto *openAllAction = menu->addAction(QStringLiteral("Open All"), this, [openAllHosts, openHost]() {
+            auto *openAllAction = menu->addAction(QStringLiteral("Open &All"), this, [openAllHosts, openHost]() {
                 for (const QString &host : openAllHosts) {
                     openHost(host);
                 }
@@ -2026,9 +2026,9 @@ MainWindow::MainWindow(QWidget *parent)
 
     rebuildTerminalsMenu();
 
-    auto *tasksMenu = menuBar()->addMenu(QStringLiteral("Tasks"));
+    auto *tasksMenu = menuBar()->addMenu(QStringLiteral("Tas&ks"));
     tasksMenu->menuAction()->setStatusTip(QStringLiteral("Run mterm tasks from the configured tasks directory"));
-    auto *selectTasksDirectoryAction = settingsMenu->addAction(QStringLiteral("Select Tasks Directory..."));
+    auto *selectTasksDirectoryAction = settingsMenu->addAction(QStringLiteral("Select &Tasks Directory..."));
     selectTasksDirectoryAction->setStatusTip(QStringLiteral("Choose the folder scanned for mterm task markdown files"));
     auto *currentTasksDirectoryAction = settingsMenu->addAction(QStringLiteral("Tasks Directory: Not set"));
     currentTasksDirectoryAction->setEnabled(false);
@@ -2168,7 +2168,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(sshConfigWatcher, &QFileSystemWatcher::directoryChanged, this, scheduleSshConfigReload);
     ensureSshConfigWatchPaths();
 
-    auto *helpMenu = menuBar()->addMenu(QStringLiteral("Help"));
+    auto *helpMenu = menuBar()->addMenu(QStringLiteral("&Help"));
     helpMenu->menuAction()->setStatusTip(QStringLiteral("Help and application information"));
     const QList<HelpPageEntry> helpPages = readHelpPages();
     if (helpPages.isEmpty()) {
