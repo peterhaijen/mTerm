@@ -199,6 +199,25 @@ public:
         setToolTip(session->broadcastLocked
                        ? QStringLiteral("Broadcast is disabled for this terminal")
                        : QStringLiteral("Receive broadcast input"));
+        setStyleSheet(QStringLiteral(
+            "QCheckBox { spacing: 4px; background: transparent; }"
+            "QCheckBox::indicator {"
+            " width: 14px;"
+            " height: 14px;"
+            " border: 1px solid #f2f6fa;"
+            " border-radius: 2px;"
+            " background-color: #ffffff;"
+            "}"
+            "QCheckBox::indicator:hover { border-color: #46d7a8; }"
+            "QCheckBox::indicator:checked {"
+            " background-color: #46d7a8;"
+            " border-color: #ffffff;"
+            "}"
+            "QCheckBox::indicator:checked:hover { background-color: #5ee8ba; }"
+            "QCheckBox::indicator:disabled {"
+            " background-color: #77818a;"
+            " border-color: #c5ccd3;"
+            "}"));
     }
 
     std::function<void(bool)> setAllChecked;
@@ -1608,10 +1627,7 @@ MainWindow::MainWindow(QWidget *parent)
 
         const int tabIndex = tabs->indexOf(session->terminal);
         if (tabIndex != -1) {
-            const QString currentTabTitle = tabs->tabText(tabIndex);
-            if (title.contains(QLatin1Char('@')) && !currentTabTitle.contains(QLatin1Char('@'))) {
-                tabs->setTabText(tabIndex, title);
-            }
+            tabs->setTabText(tabIndex, title);
             tabs->setTabToolTip(tabIndex, title);
         }
 
