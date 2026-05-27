@@ -1,6 +1,6 @@
 # mTerm
 
-mTerm is a Qt/QTermWidget terminal broadcaster. Its main purpose is to run the same commands at the same time on multiple terminal sessions, including SSH connections, while still allowing individual terminals to be enabled or disabled for broadcast input.
+mTerm is a Qt/QTermWidget terminal manager that broadcasts commands to multiple terminal sessions.
 
 ## Key Idea
 

@@ -59,9 +59,8 @@ deb: release
 			echo "Architecture: $$arch"; \
 			echo "Maintainer: Peter <peter@localhost>"; \
 			echo "Depends: $$1"; \
-			echo "Description: Qt terminal manager for local and SSH sessions"; \
-			echo " mTerm is a QTermWidget-based terminal manager with tabs, tiled"; \
-			echo " views, SSH host menus, and broadcast input controls."; \
+			echo "Description: Qt/QTermWidget terminal manager that broadcasts commands"; \
+			echo " mTerm broadcasts commands to multiple terminal sessions."; \
 		} > "$$stage/DEBIAN/control"; \
 	}; \
 	write_control "libc6"; \
@@ -81,8 +80,8 @@ deb: release
 		echo "Package: mterm"; \
 		echo "Architecture: $$arch"; \
 		echo "Depends: \$${shlibs:Depends}"; \
-		echo "Description: Qt terminal manager for local and SSH sessions"; \
-		echo " mTerm is a QTermWidget-based terminal manager."; \
+		echo "Description: Qt/QTermWidget terminal manager that broadcasts commands"; \
+		echo " mTerm broadcasts commands to multiple terminal sessions."; \
 	} > debian/control; \
 	dpkg-shlibdeps -O "$$stage/usr/bin/mTerm" > "$(DEB_BUILD_DIR)/substvars/shlibs"; \
 	rm -f debian/control; \
