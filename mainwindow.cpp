@@ -1263,6 +1263,11 @@ static QString screenProgramPath()
     return QStandardPaths::findExecutable(QStringLiteral("screen"));
 }
 
+static QString screenUnavailableMessage()
+{
+    return QStringLiteral("screen is not installed; install screen or disable Use screen sessions");
+}
+
 static bool processExists(int pid)
 {
     return pid > 0 && (kill(pid, 0) == 0 || errno == EPERM);
@@ -1750,7 +1755,7 @@ MainWindow::MainWindow(QWidget *parent)
     auto *terminalShortcutFilter = new TerminalShortcutFilter(state, terminalFont, focusSession, showStatusMessage, this);
     QApplication::instance()->installEventFilter(terminalShortcutFilter);
 
-    auto createTerminal = [this, state, terminalFont, updateSessionTitle, terminalShortcutFilter, focusSession, flashBroadcastHeader](
+    auto createTerminal = [this, state, terminalFont, updateSessionTitle, terminalShortcutFilter, focusSession, flashBroadcastHeader, showStatusMessage](
                               const QString &tabName = QStringLiteral("Terminal"),
                               const QString &program = QString(),
                               const QStringList &args = QStringList(),
@@ -1762,7 +1767,9 @@ MainWindow::MainWindow(QWidget *parent)
         QStringList terminalArgs = args;
         if (terminalProgram.isEmpty() && state->useScreen) {
             const QString screenPath = screenProgramPath();
-            if (!screenPath.isEmpty() && !screenSessionIsAttached(screenPath)) {
+            if (screenPath.isEmpty()) {
+                showStatusMessage(screenUnavailableMessage(), 6000);
+            } else if (!screenSessionIsAttached(screenPath)) {
                 terminalProgram = QStringLiteral("/bin/sh");
                 terminalArgs = QStringList{QStringLiteral("-lc"), localScreenLauncherScript(screenPath)};
                 persistentProcess = true;
@@ -1867,9 +1874,12 @@ MainWindow::MainWindow(QWidget *parent)
     useScreenAction->setCheckable(true);
     useScreenAction->setChecked(state->useScreen);
     useScreenAction->setStatusTip(QStringLiteral("Use screen sessions for new local and SSH terminals"));
-    connect(useScreenAction, &QAction::toggled, this, [state](bool checked) {
+    connect(useScreenAction, &QAction::toggled, this, [state, showStatusMessage](bool checked) {
         state->useScreen = checked;
         AppSettings::saveUseScreen(checked);
+        if (checked && screenProgramPath().isEmpty()) {
+            showStatusMessage(screenUnavailableMessage(), 6000);
+        }
     });
 
     auto *openLocalOnStartupAction = settingsMenu->addAction(QStringLiteral("Open &local terminal on startup"));
