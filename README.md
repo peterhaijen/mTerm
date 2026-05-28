@@ -14,6 +14,7 @@ Open a set of hosts, select the terminals that should receive input, and type on
 - Enable `Settings -> Use broadcast by default` to check broadcast for newly opened terminals.
 - `Alt` + `Shift` + click on a checkbox sets all checkboxes to the same state.
 - Open a local terminal from `Terminals -> Local Machine`.
+- Enable `Settings -> Open local terminal on startup` to open a local terminal when mTerm starts.
 - Read marked SSH hosts from `~/.ssh/config` and add them to the `Terminals` menu.
 - Mark a host for mTerm with a `# mTerm` comment.
 - Put one marked host in multiple menu groups with comments like:
@@ -29,6 +30,7 @@ This creates both `Terminals -> VPS -> otherHost` and `Terminals -> Webserver ->
 
 - SSH host tabs run through a small shell wrapper: a successful SSH exit closes the tab immediately, and a failed SSH exit shows a 10-second countdown in the terminal. Press any key during the countdown to keep the tab open in a local shell.
 - Screen integration is off by default and can be enabled with `Settings -> Use screen sessions`.
+- A local terminal can be opened automatically on startup with `Settings -> Open local terminal on startup`.
 - Broadcast can be enabled by default for new terminals with `Settings -> Use broadcast by default`.
 - When enabled, local terminals attach to a `screen` session named `mterm` if `screen` is installed; otherwise they fall back to the default shell.
 - When enabled, SSH host tabs attach to a remote `screen` session named `mterm` if `screen` is installed on the remote host; otherwise they fall back to the remote login shell.

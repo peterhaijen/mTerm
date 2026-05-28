@@ -82,6 +82,7 @@ struct TerminalUiState
     QList<TerminalSession *> sessions;
     ViewMode viewMode = ViewMode::Tile;
     bool useScreen = false;
+    bool openLocalOnStartup = false;
     bool broadcastByDefault = false;
     QString tasksDirectory;
     QString aiBinaryPath;
@@ -98,6 +99,7 @@ static constexpr auto viewModeKey = "ui/viewMode";
 static constexpr auto viewModeTabs = "tabs";
 static constexpr auto viewModeTile = "tile";
 static constexpr auto useScreenKey = "terminal/useScreen";
+static constexpr auto openLocalOnStartupKey = "terminal/openLocalOnStartup";
 static constexpr auto broadcastByDefaultKey = "terminal/broadcastByDefault";
 static constexpr auto tasksDirectoryKey = "tasks/directory";
 static constexpr auto aiBinaryPathKey = "ai/binaryPath";
@@ -136,6 +138,16 @@ static bool loadUseScreen()
 static void saveUseScreen(bool useScreen)
 {
     QSettings().setValue(useScreenKey, useScreen);
+}
+
+static bool loadOpenLocalOnStartup()
+{
+    return QSettings().value(openLocalOnStartupKey, false).toBool();
+}
+
+static void saveOpenLocalOnStartup(bool openLocalOnStartup)
+{
+    QSettings().setValue(openLocalOnStartupKey, openLocalOnStartup);
 }
 
 static bool loadBroadcastByDefault()
@@ -1287,6 +1299,7 @@ MainWindow::MainWindow(QWidget *parent)
     auto *state = new TerminalUiState;
     state->viewMode = AppSettings::loadViewMode();
     state->useScreen = AppSettings::loadUseScreen();
+    state->openLocalOnStartup = AppSettings::loadOpenLocalOnStartup();
     state->broadcastByDefault = AppSettings::loadBroadcastByDefault();
     state->tasksDirectory = AppSettings::loadTasksDirectory();
     state->aiBinaryPath = AppSettings::loadAiBinaryPath();
@@ -1829,6 +1842,15 @@ MainWindow::MainWindow(QWidget *parent)
         AppSettings::saveUseScreen(checked);
     });
 
+    auto *openLocalOnStartupAction = settingsMenu->addAction(QStringLiteral("Open &local terminal on startup"));
+    openLocalOnStartupAction->setCheckable(true);
+    openLocalOnStartupAction->setChecked(state->openLocalOnStartup);
+    openLocalOnStartupAction->setStatusTip(QStringLiteral("Open a local terminal when mTerm starts"));
+    connect(openLocalOnStartupAction, &QAction::toggled, this, [state](bool checked) {
+        state->openLocalOnStartup = checked;
+        AppSettings::saveOpenLocalOnStartup(checked);
+    });
+
     auto *broadcastByDefaultAction = settingsMenu->addAction(QStringLiteral("Use &broadcast by default"));
     broadcastByDefaultAction->setCheckable(true);
     broadcastByDefaultAction->setChecked(state->broadcastByDefault);
@@ -2206,4 +2228,8 @@ MainWindow::MainWindow(QWidget *parent)
     setWindowTitle(QStringLiteral("mTerm"));
     setCentralWidget(central);
     resize(800, 600);
+
+    if (state->openLocalOnStartup) {
+        createTerminal(QStringLiteral("Local Machine"));
+    }
 }
