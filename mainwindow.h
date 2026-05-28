@@ -1,8 +1,10 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
-#include <QCloseEvent>
 #include <QMainWindow>
+
+class QCloseEvent;
+struct TerminalUiState;
 
 class MainWindow : public QMainWindow
 {
@@ -13,5 +15,8 @@ public:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+
+private:
+    TerminalUiState *state = nullptr;
 };
 #endif // MAINWINDOW_H

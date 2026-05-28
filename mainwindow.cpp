@@ -1310,12 +1310,26 @@ static void stopTerminalProcess(QTermWidget *terminal)
     }
 }
 
+static void stopTerminalProcesses(TerminalUiState *state)
+{
+    if (!state) {
+        return;
+    }
+
+    for (TerminalSession *session : state->sessions) {
+        if (session->terminal) {
+            stopTerminalProcess(session->terminal);
+        }
+    }
+}
+
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     statusBar()->showMessage(QStringLiteral("Ready"));
 
-    auto *state = new TerminalUiState;
+    this->state = new TerminalUiState;
+    auto *state = this->state;
     state->viewMode = AppSettings::loadViewMode();
     state->useScreen = AppSettings::loadUseScreen();
     state->openLocalOnStartup = AppSettings::loadOpenLocalOnStartup();
@@ -1324,15 +1338,14 @@ MainWindow::MainWindow(QWidget *parent)
     state->aiBinaryPath = AppSettings::loadAiBinaryPath();
     qApp->installEventFilter(new TerminalFocusFilter(state, this));
     connect(qApp, &QCoreApplication::aboutToQuit, this, [state]() {
-        for (TerminalSession *session : state->sessions) {
-            if (session->terminal && !session->persistentProcess) {
-                stopTerminalProcess(session->terminal);
-            }
-        }
+        stopTerminalProcesses(state);
     });
-    connect(this, &QObject::destroyed, this, [state]() {
+    connect(this, &QObject::destroyed, this, [this, state]() {
         for (TerminalSession *session : state->sessions) {
             delete session;
+        }
+        if (this->state == state) {
+            this->state = nullptr;
         }
         delete state;
     });
@@ -1602,9 +1615,7 @@ MainWindow::MainWindow(QWidget *parent)
         const int closedIndex = state->sessions.indexOf(session);
         state->sessions.removeAll(session);
         QObject::disconnect(session->terminal, nullptr, nullptr, nullptr);
-        if (!session->persistentProcess) {
-            stopTerminalProcess(session->terminal);
-        }
+        stopTerminalProcess(session->terminal);
         session->terminal->setParent(nullptr);
         session->terminal->deleteLater();
         delete session;
@@ -2256,5 +2267,6 @@ MainWindow::MainWindow(QWidget *parent)
 void MainWindow::closeEvent(QCloseEvent *event)
 {
     AppSettings::saveWindowSize(size());
+    stopTerminalProcesses(state);
     QMainWindow::closeEvent(event);
 }
