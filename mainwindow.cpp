@@ -98,6 +98,7 @@ namespace AppSettings
 static constexpr auto viewModeKey = "ui/viewMode";
 static constexpr auto viewModeTabs = "tabs";
 static constexpr auto viewModeTile = "tile";
+static constexpr auto windowSizeKey = "ui/windowSize";
 static constexpr auto useScreenKey = "terminal/useScreen";
 static constexpr auto openLocalOnStartupKey = "terminal/openLocalOnStartup";
 static constexpr auto broadcastByDefaultKey = "terminal/broadcastByDefault";
@@ -128,6 +129,24 @@ static ViewMode loadViewMode()
 static void saveViewMode(ViewMode viewMode)
 {
     QSettings().setValue(viewModeKey, viewModeValue(viewMode));
+}
+
+static QSize loadWindowSize()
+{
+    const QSize defaultSize(800, 600);
+    const QSize windowSize = QSettings().value(windowSizeKey, defaultSize).toSize();
+    if (!windowSize.isValid() || windowSize.width() < 320 || windowSize.height() < 240) {
+        return defaultSize;
+    }
+
+    return windowSize;
+}
+
+static void saveWindowSize(const QSize &windowSize)
+{
+    if (windowSize.isValid()) {
+        QSettings().setValue(windowSizeKey, windowSize);
+    }
 }
 
 static bool loadUseScreen()
@@ -2227,9 +2246,15 @@ MainWindow::MainWindow(QWidget *parent)
 
     setWindowTitle(QStringLiteral("mTerm"));
     setCentralWidget(central);
-    resize(800, 600);
+    resize(AppSettings::loadWindowSize());
 
     if (state->openLocalOnStartup) {
         createTerminal(QStringLiteral("Local Machine"));
     }
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    AppSettings::saveWindowSize(size());
+    QMainWindow::closeEvent(event);
 }
