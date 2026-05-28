@@ -1066,18 +1066,13 @@ static TerminalSession *sessionFromFocusedWidget(TerminalUiState *state)
     return nullptr;
 }
 
-static int tileColumns(int count)
+static int preferredTileRows(int count)
 {
-    if (count <= 1) {
-        return 1;
+    int rows = 1;
+    while (rows * rows < count) {
+        ++rows;
     }
-    if (count <= 4) {
-        return 2;
-    }
-    if (count <= 9) {
-        return 3;
-    }
-    return 4;
+    return rows;
 }
 
 static QString printableAscii(const QString &text)
@@ -1552,7 +1547,7 @@ MainWindow::MainWindow(QWidget *parent)
                 tabs->tabBar()->setTabButton(tabIndex, QTabBar::RightSide, closeButton);
             }
         } else {
-            const int columns = tileColumns(state->sessions.count());
+            const int rows = preferredTileRows(state->sessions.count());
             for (int index = 0; index < state->sessions.count(); ++index) {
                 TerminalSession *session = state->sessions.at(index);
                 auto *cell = new QWidget(tileContent);
@@ -1600,7 +1595,7 @@ MainWindow::MainWindow(QWidget *parent)
                 session->terminal->show();
                 cell->setMinimumSize(340, 220);
 
-                tileLayout->addWidget(cell, index / columns, index % columns);
+                tileLayout->addWidget(cell, index % rows, index / rows);
             }
         }
 
