@@ -31,14 +31,14 @@ debug:
 deb: release
 	@set -e; \
 	. /etc/os-release; \
-	os_release="$${ID:-unknown}$${VERSION_ID:-unknown}"; \
+	os_release="$${VERSION_CODENAME:-$${UBUNTU_CODENAME:-unknown}}"; \
 	os_release=$$(printf "%s" "$$os_release" | sed 's/[^A-Za-z0-9.+:~-]/+/g'); \
 	version=$$(sed -n 's/^#define MTERM_VERSION "\(.*\)"/\1/p' "$(BUILD_DIR)/generated/version.h"); \
 	if [ -z "$$version" ]; then \
 		echo "Could not read version from $(BUILD_DIR)/generated/version.h" >&2; \
 		exit 1; \
 	fi; \
-	pkg_version="$${version}+$$os_release"; \
+	pkg_version="$${version}-1~$${os_release}1"; \
 	arch=$$(dpkg --print-architecture); \
 	stage="$(DEB_BUILD_DIR)/mterm"; \
 	rm -rf "$$stage"; \
